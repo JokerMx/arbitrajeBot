@@ -1,0 +1,35 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# Web dashboard
+web_dashboard/node_modules/
+web_dashboard/dist/
+web_dashboard/.env
+web_dashboard/.env.local
+
+# Logs
+logs/
+*.log
+
+# Config con secretos
+config.toml
+.env
+.env.backup
+
+# Archivos comprimidos
+*.tar
+*.tar.gz
+*.tar.bz2
+*.zip
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

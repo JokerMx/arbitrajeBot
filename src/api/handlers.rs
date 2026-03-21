@@ -1,0 +1,479 @@
+//! Manejadores para las rutas de la API
+
+use warp::{Reply, Rejection, reply::json};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use rust_decimal::prelude::ToPrimitive;
+
+use crate::bot::TradingBot;
+use crate::risk::RiskManager;
+use crate::types::{StrategyConfig, RiskConfig, MarketConfig};
+use crate::notifier::TelegramNotifier;
+use crate::telegram_bot::TelegramBot;
+use super::models::*;
+
+// =============================================
+// ESTADO COMPARTIDO
+// =============================================
+
+#[derive(Clone)]
+pub struct ApiState {
+    pub bot: Arc<Mutex<TradingBot>>,
+    pub risk_manager: Arc<Mutex<RiskManager>>,
+    pub strategy_config: Arc<Mutex<StrategyConfig>>,
+    pub risk_config: Arc<Mutex<RiskConfig>>,
+    pub market_configs: Arc<Mutex<Vec<MarketConfig>>>,
+    pub notifier: Arc<TelegramNotifier>,
+    pub telegram_bot: Option<Arc<TelegramBot>>,
+}
+
+// =============================================
+// HANDLERS DE ESTADÍSTICAS
+// =============================================
+
+pub async fn get_stats(state: ApiState) -> Result<impl Reply, Rejection> {
+    let risk = state.risk_manager.lock().await;
+    
+    let trades: Vec<TradeResponse> = risk.recent_trades(50)
+        .iter()
+        .map(|t| TradeResponse {
+            id: t.order_id.clone(),
+            symbol: t.symbol.clone(),
+            side: format!("{}", t.side),
+            size: t.size.to_f64().unwrap_or(0.0),
+            price: t.price.to_f64().unwrap_or(0.0),
+            value: (t.size * t.price).to_f64().unwrap_or(0.0),
+            pnl: t.pnl.to_f64().unwrap_or(0.0),
+            timestamp: t.timestamp.to_rfc3339(),
+        })
+        .collect();
+    
+    let positions: Vec<PositionResponse> = risk.get_positions()
+        .iter()
+        .map(|p| PositionResponse {
+            symbol: p.symbol.clone(),
+            size: p.size.to_f64().unwrap_or(0.0),
+            entry_price: p.entry_price.to_f64().unwrap_or(0.0),
+            current_price: p.current_price.to_f64().unwrap_or(0.0),
+            unrealized_pnl: p.unrealized_pnl.to_f64().unwrap_or(0.0),
+            realized_pnl: p.realized_pnl.to_f64().unwrap_or(0.0),
+            value: (p.size * p.current_price).to_f64().unwrap_or(0.0),
+        })
+        .collect();
+    
+    let history = vec![
+        HistoryPoint {
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            balance: risk.current_balance().to_f64().unwrap_or(0.0),
+            pnl: risk.total_pnl().to_f64().unwrap_or(0.0),
+        }
+    ];
+    
+    let balance = risk.current_balance().to_f64().unwrap_or(0.0);
+    let pnl = risk.total_pnl().to_f64().unwrap_or(0.0);
+    let initial = risk.initial_capital().to_f64().unwrap_or(10.0);
+    let winning_trades = risk.winning_trades();
+    let losing_trades = risk.losing_trades();
+    let total_trades = winning_trades + losing_trades;
+    let win_rate = if total_trades > 0 {
+        (winning_trades as f64 / total_trades as f64) * 100.0
+    } else {
+        0.0
+    };
+    
+    let response = StatsResponse {
+        balance,
+        pnl,
+        pnl_percent: if initial > 0.0 { (pnl / initial) * 100.0 } else { 0.0 },
+        daily_pnl: risk.daily_pnl().to_f64().unwrap_or(0.0),
+        drawdown: risk.current_drawdown().to_f64().unwrap_or(0.0) * 100.0,
+        win_rate,
+        total_trades: total_trades as u32,
+        winning_trades,
+        losing_trades,
+        volume: risk.total_volume().to_f64().unwrap_or(0.0),
+        positions,
+        trades,
+        history,
+    };
+    
+    Ok(json(&response))
+}
+
+// =============================================
+// HANDLERS DE CONFIGURACIÓN
+// =============================================
+
+pub async fn get_config(state: ApiState) -> Result<impl Reply, Rejection> {
+    let strategy = state.strategy_config.lock().await;
+    let risk = state.risk_config.lock().await;
+    let markets = state.market_configs.lock().await;
+    let risk_mgr = state.risk_manager.lock().await;
+    
+    let response = FullConfigResponse {
+        strategy: StrategyConfigResponse {
+            base_spread_ticks: strategy.base_spread_ticks,
+            risk_aversion: strategy.risk_aversion,
+            market_impact: strategy.market_impact,
+            inventory_skew_strength: strategy.inventory_skew_strength,
+            volatility_lookback_minutes: strategy.volatility_lookback_minutes,
+            order_refresh_ms: strategy.order_refresh_time_ms,
+            max_inventory_ratio: strategy.max_inventory_ratio,
+        },
+        risk: RiskConfigResponse {
+            max_position_size_pct: risk.max_position_size_pct,
+            max_daily_loss_pct: risk.max_daily_loss_pct,
+            max_drawdown_pct: risk.max_drawdown_pct,
+            kill_switch_enabled: risk.kill_switch_enabled,
+            circuit_breaker_threshold: risk.circuit_breaker_threshold,
+        },
+        markets: markets.iter().map(|m| MarketConfigResponse {
+            symbol: m.symbol.clone(),
+            enabled: m.enabled,
+            margin_alloc: m.margin_alloc,
+            min_size: m.min_size,
+        }).collect(),
+        telegram: TelegramConfigResponse {
+            enabled: false,
+            bot_token: "".to_string(),
+            chat_id: "".to_string(),
+            notify_orders: true,
+            notify_fills: true,
+            notify_status: true,
+        },
+        initial_capital: risk_mgr.initial_capital().to_f64().unwrap_or(10.0),
+    };
+    
+    Ok(json(&response))
+}
+
+pub async fn update_config(
+    update: FullConfigUpdate,
+    state: ApiState,
+) -> Result<impl Reply, Rejection> {
+    
+    // Actualizar estrategia
+    if let Some(strat_update) = update.strategy {
+        let mut strategy = state.strategy_config.lock().await;
+        if let Some(v) = strat_update.base_spread_ticks { strategy.base_spread_ticks = v; }
+        if let Some(v) = strat_update.risk_aversion { strategy.risk_aversion = v; }
+        if let Some(v) = strat_update.market_impact { strategy.market_impact = v; }
+        if let Some(v) = strat_update.inventory_skew_strength { strategy.inventory_skew_strength = v; }
+        if let Some(v) = strat_update.volatility_lookback_minutes { strategy.volatility_lookback_minutes = v; }
+        if let Some(v) = strat_update.order_refresh_ms { strategy.order_refresh_time_ms = v; }
+        if let Some(v) = strat_update.max_inventory_ratio { strategy.max_inventory_ratio = v; }
+    }
+    
+    // Actualizar riesgo (usando porcentajes)
+    if let Some(risk_update) = update.risk {
+        let mut risk = state.risk_config.lock().await;
+        if let Some(v) = risk_update.max_position_size_pct { risk.max_position_size_pct = v; }
+        if let Some(v) = risk_update.max_daily_loss_pct { risk.max_daily_loss_pct = v; }
+        if let Some(v) = risk_update.max_drawdown_pct { risk.max_drawdown_pct = v; }
+        if let Some(v) = risk_update.kill_switch_enabled { risk.kill_switch_enabled = v; }
+        if let Some(v) = risk_update.circuit_breaker_threshold { risk.circuit_breaker_threshold = v; }
+    }
+    
+    // Actualizar mercados
+    if let Some(market_updates) = update.markets {
+        let mut markets = state.market_configs.lock().await;
+        for update in market_updates {
+            if let Some(market) = markets.iter_mut().find(|m| m.symbol == update.symbol) {
+                if let Some(v) = update.enabled { market.enabled = v; }
+                if let Some(v) = update.margin_alloc { market.margin_alloc = v; }
+                if let Some(v) = update.min_size { market.min_size = v; }
+            }
+        }
+    }
+    
+    Ok(json(&serde_json::json!({
+        "status": "success",
+        "message": "Configuración actualizada"
+    })))
+}
+
+// =============================================
+// HANDLERS DE CONTROL DEL BOT
+// =============================================
+
+pub async fn start_bot(state: ApiState) -> Result<impl Reply, Rejection> {
+    let _bot = state.bot.lock().await;
+    Ok(json(&serde_json::json!({
+        "status": "success",
+        "message": "Bot iniciado"
+    })))
+}
+
+pub async fn stop_bot(state: ApiState) -> Result<impl Reply, Rejection> {
+    let _bot = state.bot.lock().await;
+    Ok(json(&serde_json::json!({
+        "status": "success",
+        "message": "Bot detenido"
+    })))
+}
+
+pub async fn restart_bot(state: ApiState) -> Result<impl Reply, Rejection> {
+    let _bot = state.bot.lock().await;
+    Ok(json(&serde_json::json!({
+        "status": "success",
+        "message": "Bot reiniciado"
+    })))
+}
+
+// =============================================
+// HANDLERS DE TELEGRAM
+// =============================================
+
+pub async fn get_telegram_users(state: ApiState) -> Result<impl Reply, Rejection> {
+    if let Some(bot) = &state.telegram_bot {
+        let users = bot.get_users().await;
+        Ok(json(&users))
+    } else {
+        Ok(json(&Vec::<crate::telegram_bot::TelegramUser>::new()))
+    }
+}
+
+pub async fn get_telegram_stats(state: ApiState) -> Result<impl Reply, Rejection> {
+    if let Some(bot) = &state.telegram_bot {
+        let stats = bot.get_stats().await;
+        Ok(json(&stats))
+    } else {
+        Ok(json(&crate::telegram_bot::TelegramStats {
+            total_users: 0,
+            authorized_users: 0,
+            subscribed_users: 0,
+            active_today: 0,
+        }))
+    }
+}
+
+pub async fn authorize_telegram_user(
+    chat_id: String,
+    state: ApiState,
+) -> Result<impl Reply, Rejection> {
+    if let Some(bot) = &state.telegram_bot {
+        match bot.authorize_user(&chat_id).await {
+            Ok(_) => Ok(json(&serde_json::json!({
+                "success": true,
+                "message": format!("Usuario {} autorizado correctamente", chat_id)
+            }))),
+            Err(e) => Ok(json(&serde_json::json!({
+                "success": false,
+                "message": e
+            }))),
+        }
+    } else {
+        Ok(json(&serde_json::json!({
+            "success": false,
+            "message": "Bot de Telegram no disponible"
+        })))
+    }
+}
+
+pub async fn deauthorize_telegram_user(
+    chat_id: String,
+    state: ApiState,
+) -> Result<impl Reply, Rejection> {
+    if let Some(bot) = &state.telegram_bot {
+        match bot.deauthorize_user(&chat_id).await {
+            Ok(_) => Ok(json(&serde_json::json!({
+                "success": true,
+                "message": format!("Usuario {} desautorizado", chat_id)
+            }))),
+            Err(e) => Ok(json(&serde_json::json!({
+                "success": false,
+                "message": e
+            }))),
+        }
+    } else {
+        Ok(json(&serde_json::json!({
+            "success": false,
+            "message": "Bot de Telegram no disponible"
+        })))
+    }
+}
+
+pub async fn subscribe_telegram_user(
+    chat_id: String,
+    state: ApiState,
+) -> Result<impl Reply, Rejection> {
+    if let Some(bot) = &state.telegram_bot {
+        match bot.subscribe_user(&chat_id).await {
+            Ok(_) => Ok(json(&serde_json::json!({
+                "success": true,
+                "message": format!("Usuario {} suscrito", chat_id)
+            }))),
+            Err(e) => Ok(json(&serde_json::json!({
+                "success": false,
+                "message": e
+            }))),
+        }
+    } else {
+        Ok(json(&serde_json::json!({
+            "success": false,
+            "message": "Bot de Telegram no disponible"
+        })))
+    }
+}
+
+pub async fn unsubscribe_telegram_user(
+    chat_id: String,
+    state: ApiState,
+) -> Result<impl Reply, Rejection> {
+    if let Some(bot) = &state.telegram_bot {
+        match bot.unsubscribe_user(&chat_id).await {
+            Ok(_) => Ok(json(&serde_json::json!({
+                "success": true,
+                "message": format!("Usuario {} desuscrito", chat_id)
+            }))),
+            Err(e) => Ok(json(&serde_json::json!({
+                "success": false,
+                "message": e
+            }))),
+        }
+    } else {
+        Ok(json(&serde_json::json!({
+            "success": false,
+            "message": "Bot de Telegram no disponible"
+        })))
+    }
+}
+
+pub async fn delete_telegram_user(
+    chat_id: String,
+    state: ApiState,
+) -> Result<impl Reply, Rejection> {
+    if let Some(bot) = &state.telegram_bot {
+        match bot.delete_user(&chat_id).await {
+            Ok(_) => Ok(json(&serde_json::json!({
+                "success": true,
+                "message": format!("Usuario {} eliminado", chat_id)
+            }))),
+            Err(e) => Ok(json(&serde_json::json!({
+                "success": false,
+                "message": e
+            }))),
+        }
+    } else {
+        Ok(json(&serde_json::json!({
+            "success": false,
+            "message": "Bot de Telegram no disponible"
+        })))
+    }
+}
+
+pub async fn send_telegram_broadcast(
+    body: serde_json::Value,
+    state: ApiState,
+) -> Result<impl Reply, Rejection> {
+    if let Some(bot) = &state.telegram_bot {
+        let message = body["message"].as_str().unwrap_or("");
+        match bot.broadcast_message(message).await {
+            Ok(sent) => Ok(json(&serde_json::json!({
+                "success": true,
+                "message": "Broadcast enviado",
+                "sent": sent
+            }))),
+            Err(e) => Ok(json(&serde_json::json!({
+                "success": false,
+                "message": e,
+                "sent": 0
+            }))),
+        }
+    } else {
+        Ok(json(&serde_json::json!({
+            "success": false,
+            "message": "Bot de Telegram no disponible",
+            "sent": 0
+        })))
+    }
+}
+
+pub async fn get_telegram_commands(_state: ApiState) -> Result<impl Reply, Rejection> {
+    let commands = vec![
+        serde_json::json!({
+            "command": "/start",
+            "description": "Iniciar el bot",
+            "access": "public"
+        }),
+        serde_json::json!({
+            "command": "/help",
+            "description": "Mostrar ayuda",
+            "access": "public"
+        }),
+        serde_json::json!({
+            "command": "/status",
+            "description": "Ver estado del bot",
+            "access": "authorized"
+        }),
+        serde_json::json!({
+            "command": "/balance",
+            "description": "Ver balance",
+            "access": "authorized"
+        }),
+        serde_json::json!({
+            "command": "/trades",
+            "description": "Ver últimos trades",
+            "access": "authorized"
+        }),
+        serde_json::json!({
+            "command": "/subscribe",
+            "description": "Suscribirse a notificaciones",
+            "access": "public"
+        }),
+        serde_json::json!({
+            "command": "/unsubscribe",
+            "description": "Darse de baja",
+            "access": "public"
+        }),
+        serde_json::json!({
+            "command": "/users",
+            "description": "Listar usuarios (admin)",
+            "access": "admin"
+        }),
+        serde_json::json!({
+            "command": "/authorize",
+            "description": "Autorizar usuario (admin)",
+            "access": "admin"
+        }),
+        serde_json::json!({
+            "command": "/deauthorize",
+            "description": "Desautorizar usuario (admin)",
+            "access": "admin"
+        }),
+        serde_json::json!({
+            "command": "/broadcast",
+            "description": "Enviar mensaje a todos (admin)",
+            "access": "admin"
+        }),
+    ];
+    Ok(json(&commands))
+}
+
+// =============================================
+// MANEJADOR DE ERRORES
+// =============================================
+
+pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Rejection> {
+    let code;
+    let message;
+    
+    if err.is_not_found() {
+        code = warp::http::StatusCode::NOT_FOUND;
+        message = "Ruta no encontrada";
+    } else if err.find::<warp::reject::MethodNotAllowed>().is_some() {
+        code = warp::http::StatusCode::METHOD_NOT_ALLOWED;
+        message = "Método no permitido";
+    } else {
+        code = warp::http::StatusCode::INTERNAL_SERVER_ERROR;
+        message = "Error interno del servidor";
+    }
+    
+    Ok(warp::reply::with_status(
+        warp::reply::json(&serde_json::json!({
+            "error": message,
+            "status": code.as_u16()
+        })),
+        code,
+    ))
+}

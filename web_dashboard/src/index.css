@@ -1,0 +1,441 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-dark-100 text-white antialiased;
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  }
+
+  /* Scrollbar personalizada */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-dark-200;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-dark-400 rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-dark-300;
+  }
+
+  /* Selección de texto */
+  ::selection {
+    @apply bg-primary-600/30 text-white;
+  }
+}
+
+@layer components {
+  /* Cards */
+  .card {
+    @apply bg-dark-200 rounded-xl border border-dark-300 p-6 hover:border-dark-400 transition-colors;
+  }
+
+  /* Botones */
+  .btn-primary {
+    @apply bg-primary-600 hover:bg-primary-700 text-white font-medium py-2 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-secondary {
+    @apply bg-dark-300 hover:bg-dark-400 text-gray-300 font-medium py-2 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-danger {
+    @apply bg-danger hover:bg-danger/80 text-white font-medium py-2 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  /* Inputs */
+  .input-range {
+    @apply w-full h-2 bg-dark-300 rounded-lg appearance-none cursor-pointer;
+  }
+
+  .input-range::-webkit-slider-thumb {
+    @apply appearance-none w-4 h-4 bg-primary-600 rounded-full cursor-pointer hover:bg-primary-500 transition-colors;
+  }
+
+  .input-range::-moz-range-thumb {
+    @apply w-4 h-4 bg-primary-600 rounded-full cursor-pointer border-0 hover:bg-primary-500 transition-colors;
+  }
+
+  /* Select */
+  .select-custom {
+    @apply w-full bg-dark-300 rounded-lg px-4 py-2 text-sm border border-dark-400 focus:outline-none focus:ring-2 focus:ring-primary-500/50 text-white;
+  }
+
+  /* Tablas */
+  .table-header {
+    @apply text-left text-sm text-gray-400 border-b border-dark-300 pb-3;
+  }
+
+  .table-cell {
+    @apply py-3 border-b border-dark-300;
+  }
+
+  /* Badges */
+  .badge-success {
+    @apply bg-success/20 text-success text-xs px-2 py-1 rounded-full;
+  }
+
+  .badge-warning {
+    @apply bg-warning/20 text-warning text-xs px-2 py-1 rounded-full;
+  }
+
+  .badge-danger {
+    @apply bg-danger/20 text-danger text-xs px-2 py-1 rounded-full;
+  }
+
+  .badge-info {
+    @apply bg-primary-500/20 text-primary-500 text-xs px-2 py-1 rounded-full;
+  }
+
+  /* Alertas */
+  .alert {
+    @apply p-3 rounded-lg text-sm border;
+  }
+
+  .alert-success {
+    @apply bg-success/10 border-success/20 text-success;
+  }
+
+  .alert-warning {
+    @apply bg-warning/10 border-warning/20 text-warning;
+  }
+
+  .alert-danger {
+    @apply bg-danger/10 border-danger/20 text-danger;
+  }
+
+  .alert-info {
+    @apply bg-primary-500/10 border-primary-500/20 text-primary-500;
+  }
+
+  /* Tooltips */
+  .tooltip {
+    @apply absolute z-50 px-2 py-1 text-xs font-medium text-white bg-dark-300 rounded-lg shadow-lg border border-dark-400 whitespace-nowrap;
+  }
+
+  /* Animaciones */
+  .animate-fade-in {
+    animation: fadeIn 0.3s ease-in-out;
+  }
+
+  .animate-slide-up {
+    animation: slideUp 0.3s ease-out;
+  }
+
+  .animate-slide-down {
+    animation: slideDown 0.3s ease-out;
+  }
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes slideUp {
+    from {
+      transform: translateY(10px);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+
+  @keyframes slideDown {
+    from {
+      transform: translateY(-10px);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+}
+
+@layer utilities {
+  /* Colores de texto para P&L */
+  .text-profit {
+    @apply text-success;
+  }
+
+  .text-loss {
+    @apply text-danger;
+  }
+
+  /* Fondos con opacidad */
+  .bg-profit {
+    @apply bg-success/10;
+  }
+
+  .bg-loss {
+    @apply bg-danger/10;
+  }
+
+  /* Tamaños de fuente monoespaciada */
+  .text-mono-sm {
+    @apply font-mono text-sm;
+  }
+
+  .text-mono-base {
+    @apply font-mono text-base;
+  }
+
+  .text-mono-lg {
+    @apply font-mono text-lg;
+  }
+
+  .text-mono-xl {
+    @apply font-mono text-xl;
+  }
+
+  /* Bordes */
+  .border-profit {
+    @apply border-success/20;
+  }
+
+  .border-loss {
+    @apply border-danger/20;
+  }
+
+  /* Sombras */
+  .shadow-card {
+    @apply shadow-lg shadow-black/20;
+  }
+
+  .shadow-hover {
+    @apply hover:shadow-xl hover:shadow-black/30 transition-shadow;
+  }
+
+  /* Grid layouts */
+  .grid-dashboard {
+    @apply grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4;
+  }
+
+  .grid-stats {
+    @apply grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4;
+  }
+
+  /* Flex utilities */
+  .flex-center {
+    @apply flex items-center justify-center;
+  }
+
+  .flex-between {
+    @apply flex items-center justify-between;
+  }
+
+  .flex-col-center {
+    @apply flex flex-col items-center justify-center;
+  }
+
+  /* Truncate multilínea */
+  .line-clamp-2 {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .line-clamp-3 {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  /* Efectos hover */
+  .hover-lift {
+    @apply transition-transform hover:-translate-y-1;
+  }
+
+  .hover-glow {
+    @apply transition-shadow hover:shadow-lg hover:shadow-primary-500/20;
+  }
+
+  /* Estados de carga */
+  .loading-pulse {
+    @apply animate-pulse bg-dark-300;
+  }
+
+  .loading-spinner {
+    @apply animate-spin rounded-full border-2 border-dark-400 border-t-primary-600;
+  }
+
+  /* Glassmorphism */
+  .glass {
+    @apply bg-dark-200/80 backdrop-blur-sm border border-dark-300/50;
+  }
+
+  /* Gradientes */
+  .gradient-primary {
+    @apply bg-gradient-to-r from-primary-600 to-primary-500;
+  }
+
+  .gradient-success {
+    @apply bg-gradient-to-r from-success to-success/80;
+  }
+
+  .gradient-danger {
+    @apply bg-gradient-to-r from-danger to-danger/80;
+  }
+
+  /* Responsive */
+  @screen sm {
+    .text-responsive {
+      @apply text-base;
+    }
+  }
+
+  @screen md {
+    .text-responsive {
+      @apply text-lg;
+    }
+  }
+
+  @screen lg {
+    .text-responsive {
+      @apply text-xl;
+    }
+  }
+}
+
+/* Estilos para recharts personalizados */
+.recharts-wrapper {
+  @apply font-mono;
+}
+
+.recharts-cartesian-grid line {
+  @apply stroke-dark-300;
+}
+
+.recharts-text {
+  @apply fill-gray-400 text-xs;
+}
+
+.recharts-tooltip-wrapper {
+  @apply !bg-dark-300 border border-dark-400 rounded-lg shadow-lg;
+}
+
+.recharts-default-tooltip {
+  @apply !bg-dark-300 !border-none !rounded-lg;
+}
+
+.recharts-tooltip-label {
+  @apply !text-gray-400 !mb-1;
+}
+
+.recharts-tooltip-item {
+  @apply !text-white !font-mono;
+}
+
+.recharts-legend-item-text {
+  @apply !text-gray-400;
+}
+
+/* Estilos para react-hot-toast */
+.toast-custom {
+  @apply !bg-dark-300 !text-white !border !border-dark-400 !rounded-lg !shadow-lg;
+}
+
+.toast-success {
+  @apply !border-success/20 !text-success;
+}
+
+.toast-error {
+  @apply !border-danger/20 !text-danger;
+}
+
+.toast-warning {
+  @apply !border-warning/20 !text-warning;
+}
+
+/* Estilos para inputs number */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  @apply opacity-100;
+}
+
+/* Prevenir scroll cuando modal está abierto */
+.no-scroll {
+  @apply overflow-hidden;
+}
+
+/* Texto seleccionable vs no seleccionable */
+.selectable {
+  @apply select-text;
+}
+
+.unselectable {
+  @apply select-none;
+}
+
+/* Z-index utilities */
+.z-modal {
+  z-index: 1000;
+}
+
+.z-tooltip {
+  z-index: 2000;
+}
+
+.z-toast {
+  z-index: 3000;
+}
+
+/* Al final del archivo, añade: */
+
+/* Scrollbar personalizada para el sidebar */
+.scrollbar-thin::-webkit-scrollbar {
+  width: 4px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: #1e293b; /* dark-300 */
+  border-radius: 8px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: #475569; /* dark-400 */
+  border-radius: 8px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: #64748b; /* dark-500 */
+}
+
+/* Animaciones para el sidebar */
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.sidebar-item-enter {
+  animation: slideIn 0.2s ease-out;
+}
+
+/* Transiciones suaves */
+* {
+  transition-property: background-color, border-color, color, fill, stroke, opacity, box-shadow, transform;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
