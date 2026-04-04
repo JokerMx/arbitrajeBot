@@ -59,7 +59,10 @@ if [ -z "$PRIVATE_KEY" ]; then
     exit 1
 fi
 
-NETWORK=${NETWORK:-testnet}
+if [ -z "$NETWORK" ]; then
+    echo -e "${RED}❌ NETWORK no está definido en .env${NC}"
+    exit 1
+fi
 API_PORT=${API_PORT:-3001}
 DASHBOARD_HOST=${DASHBOARD_HOST:-0.0.0.0}
 DASHBOARD_PORT=${DASHBOARD_PORT:-5173}
