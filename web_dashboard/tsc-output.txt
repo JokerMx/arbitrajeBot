@@ -1,0 +1,16 @@
+src/components/Admin/TelegramUsers.tsx(16,8): error TS2307: Cannot find module 'lucide-react' or its corresponding type declarations.
+src/components/Admin/UserDetailModal.tsx(2,68): error TS2307: Cannot find module 'lucide-react' or its corresponding type declarations.
+src/components/Admin/UserDetailModal.tsx(4,24): error TS2307: Cannot find module 'date-fns' or its corresponding type declarations.
+src/components/Admin/UserDetailModal.tsx(5,20): error TS2307: Cannot find module 'date-fns/locale' or its corresponding type declarations.
+src/components/Controls/MarketControls.tsx(3,40): error TS2307: Cannot find module 'lucide-react' or its corresponding type declarations.
+src/components/Controls/RiskControls.tsx(3,41): error TS2307: Cannot find module 'lucide-react' or its corresponding type declarations.
+src/components/Controls/StrategyControls.tsx(3,45): error TS2307: Cannot find module 'lucide-react' or its corresponding type declarations.
+src/components/Dashboard/BalanceChart.tsx(12,55): error TS2307: Cannot find module 'date-fns' or its corresponding type declarations.
+src/components/Dashboard/BalanceChart.tsx(13,20): error TS2307: Cannot find module 'date-fns/locale' or its corresponding type declarations.
+src/components/Dashboard/PositionsTable.tsx(3,42): error TS2307: Cannot find module 'lucide-react' or its corresponding type declarations.
+src/components/Dashboard/StatsCards.tsx(9,8): error TS2307: Cannot find module 'lucide-react' or its corresponding type declarations.
+src/components/Dashboard/TradesTable.tsx(3,24): error TS2307: Cannot find module 'date-fns' or its corresponding type declarations.
+src/components/Dashboard/TradesTable.tsx(4,20): error TS2307: Cannot find module 'date-fns/locale' or its corresponding type declarations.
+src/components/Dashboard/TradesTable.tsx(5,42): error TS2307: Cannot find module 'lucide-react' or its corresponding type declarations.
+src/components/Layout/Header.tsx(2,39): error TS2307: Cannot find module 'lucide-react' or its corresponding type declarations.
+src/components/Layout/Sidebar.tsx(18,8): error TS2307: Cannot find module 'lucide-react' or its corresponding type declarations.

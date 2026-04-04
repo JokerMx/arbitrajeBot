@@ -1,8 +1,9 @@
 import axios from 'axios';
 import { TelegramUser, TelegramStats, TelegramCommand } from '../types/telegram';
 import toast from 'react-hot-toast';
+import { backendApiBaseUrl } from './backendConfig';
 
-const API_BASE = 'http://localhost:3001/api';
+const API_BASE = backendApiBaseUrl;
 
 class TelegramAdminApi {
   private async request<T>(

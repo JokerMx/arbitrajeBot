@@ -244,7 +244,7 @@ async fn main() -> anyhow::Result<()> {
     );
     
     let port = 3001;
-    info!("🚀 Servidor API iniciado en http://localhost:{}", port);
+    info!("🚀 Servidor API iniciado en http://0.0.0.0:{}", port);
     info!("📊 Dashboard disponible en http://localhost:{}/dashboard", port);
     info!("📡 WebSocket disponible en ws://localhost:{}/ws", port);
     info!("📱 API Telegram en http://localhost:{}/api/telegram", port);
@@ -261,7 +261,7 @@ async fn main() -> anyhow::Result<()> {
                 error!("❌ Error en el bot: {}", e);
             }
         }
-        _ = warp::serve(api_routes).run(([127, 0, 0, 1], port)) => {
+        _ = warp::serve(api_routes).run(([0, 0, 0, 0], port)) => {
             info!("🛑 Servidor API detenido");
         }
     }

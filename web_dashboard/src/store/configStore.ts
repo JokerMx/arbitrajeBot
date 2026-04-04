@@ -7,6 +7,7 @@ import {
   MarketConfig, 
   TelegramConfig 
 } from "../services/types";
+import { backendApiBaseUrl } from "../services/backendConfig";
 
 const DEFAULT_CONFIG: FullConfig = {
   strategy: {
@@ -109,7 +110,7 @@ export const useConfigStore = create<ConfigStore>()(
       loadConfig: async () => {
         set({ isLoading: true, error: null });
         try {
-          const response = await fetch("/api/config");
+          const response = await fetch(`${backendApiBaseUrl}/config`);
           if (!response.ok) throw new Error("Error cargando configuración");
           const config = await response.json();
           set({ config, isLoading: false });
@@ -121,7 +122,7 @@ export const useConfigStore = create<ConfigStore>()(
       saveConfig: async () => {
         const { config } = get();
         try {
-          const response = await fetch("/api/config", {
+          const response = await fetch(`${backendApiBaseUrl}/config`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(config),
