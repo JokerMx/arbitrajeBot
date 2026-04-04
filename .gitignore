@@ -2,7 +2,7 @@
 /target/
 **/*.rs.bk
 Cargo.lock
-
+**/*Zone.Identifier
 # Web dashboard
 web_dashboard/node_modules/
 web_dashboard/dist/
