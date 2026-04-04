@@ -27,6 +27,7 @@ use crate::types::{MarketConfig, StrategyConfig, RiskConfig};
 use crate::api::api_routes;
 use crate::telegram_bot::TelegramBot;
 use crate::db::{Database, ConfigRepository};
+use crate::executor::ExchangeType;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -134,10 +135,10 @@ async fn main() -> anyhow::Result<()> {
     
     let exchange_type_str = env::var("EXCHANGE_TYPE").unwrap_or_else(|_| "hyperliquid_mainnet".to_string());
     let exchange_type = match exchange_type_str.as_str() {
-        "hyperliquid_mainnet" => executor::ExchangeType::HyperliquidMainnet,
-        "hyperliquid_testnet" => executor::ExchangeType::HyperliquidTestnet,
-        "simulated" => executor::ExchangeType::Simulated,
-        _ => executor::ExchangeType::HyperliquidMainnet,
+        "hyperliquid_mainnet" => ExchangeType::HyperliquidMainnet,
+        "hyperliquid_testnet" => ExchangeType::HyperliquidTestnet,
+        "simulated" => ExchangeType::Simulated,
+        _ => ExchangeType::HyperliquidMainnet,
     };
     
     info!("🔄 Modo de exchange: {}", exchange_type_str);
@@ -165,7 +166,7 @@ async fn main() -> anyhow::Result<()> {
     info!("🌐 Red: {}", network);
     info!("🗄️ Persistencia: MariaDB con prefijo '{}'", db.config.table_prefix);
     
-    if let executor::ExchangeType::HyperliquidMainnet = exchange_type {
+    if let ExchangeType::HyperliquidMainnet = exchange_type {
         info!("⚠️ ⚠️ ⚠️ IMPORTANTE ⚠️ ⚠️ ⚠️");
         info!("   ESTÁS OPERANDO EN MAINNET CON DINERO REAL");
         info!("   Capital: ${:.2} USDC", initial_capital);
@@ -212,13 +213,6 @@ async fn main() -> anyhow::Result<()> {
     // INICIALIZAR BOT CON EL MISMO RISK MANAGER
     // =============================================
     
-    let is_testnet = network == "testnet";
-    let executor = Arc::new(executor::OrderExecutor::new(
-        &bot_config.private_key,
-        is_testnet,
-        exchange_type,
-    ).await?);
-    
     info!("🤖 Creando TradingBot...");
     let bot = TradingBot::new(
         bot_config,
@@ -228,6 +222,7 @@ async fn main() -> anyhow::Result<()> {
         initial_capital,
         notifier.clone(),
         risk_manager.clone(),
+        exchange_type,
     ).await?;
     
     let bot = Arc::new(Mutex::new(bot));
@@ -293,7 +288,7 @@ async fn main() -> anyhow::Result<()> {
     info!("📱 API Telegram en http://localhost:{}/api/telegram", port);
     info!("🗄️ Base de datos: MariaDB en {}", db.config.url);
     
-    if let executor::ExchangeType::HyperliquidMainnet = exchange_type {
+    if let ExchangeType::HyperliquidMainnet = exchange_type {
         info!("💹 OPERANDO EN MAINNET CON DINERO REAL");
         info!("   Monitorear en: http://localhost:{}/dashboard", port);
     }
@@ -308,7 +303,6 @@ async fn main() -> anyhow::Result<()> {
             if let Err(e) = result {
                 error!("❌ Error en el bot: {}", e);
                 
-                // Notificar error por Telegram
                 if notifier.is_enabled().await {
                     let _ = notifier.send_message(&format!("🚨 *ERROR CRÍTICO*\n\n{}", e)).await;
                 }
@@ -321,7 +315,6 @@ async fn main() -> anyhow::Result<()> {
     
     info!("👋 Bot finalizado");
     
-    // Notificar parada
     if notifier.is_enabled().await {
         let _ = notifier.send_message("🛑 Bot detenido correctamente").await;
     }

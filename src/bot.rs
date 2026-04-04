@@ -16,6 +16,7 @@ use crate::strategy::AvellanedaStoikov;
 use crate::risk::RiskManager;
 use crate::executor::OrderExecutor;
 use crate::notifier::TelegramNotifier;
+use crate::executor::ExchangeType;
 
 #[derive(Clone)]
 pub struct TradingBot {
@@ -56,6 +57,7 @@ impl TradingBot {
         _initial_capital: Decimal,
         notifier: Arc<TelegramNotifier>,
         risk_manager: Arc<Mutex<RiskManager>>,
+        exchange_type: ExchangeType,
     ) -> anyhow::Result<Self> {
         info!("Inicializando TradingBot en red: {}", config.network);
         
@@ -63,6 +65,7 @@ impl TradingBot {
         let executor = Arc::new(OrderExecutor::new(
             &config.private_key,
             is_testnet,
+            exchange_type,
         ).await?);
         
         let mut markets = HashMap::new();
@@ -168,7 +171,6 @@ impl TradingBot {
             
             drop(risk);
             
-            // Enviar notificación de estado si está habilitado
             if notifier.should_notify_status().await {
                 let status_msg = notifier.format_status(balance, pnl, win_rate, drawdown);
                 let _ = notifier.send_message(&status_msg).await;

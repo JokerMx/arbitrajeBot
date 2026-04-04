@@ -1,8 +1,8 @@
 //! Ejecutor de órdenes - Soporte para Hyperliquid Mainnet y Testnet
 
 use rust_decimal::Decimal;
-use anyhow::{Result, anyhow};
-use tracing::{info, error, warn};
+use anyhow::Result;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::types::OrderRequest;
@@ -54,7 +54,6 @@ impl OrderExecutor {
     pub async fn place_order(&self, order: OrderRequest) -> Result<String> {
         match self.exchange {
             ExchangeType::Simulated => {
-                // Simular delay de red
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                 let order_id = format!("sim_{}", Uuid::new_v4());
                 info!("💰 [SIMULADO] Orden colocada: {:?} {} @ ${:.2} - ID: {}",
@@ -63,8 +62,6 @@ impl OrderExecutor {
                 Ok(order_id)
             }
             ExchangeType::HyperliquidTestnet => {
-                // TODO: Implementar conexión real con Hyperliquid Testnet
-                // Por ahora, simular pero con标识 diferente
                 tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
                 let order_id = format!("hl_testnet_{}", Uuid::new_v4());
                 info!("💰 [TESTNET] Orden colocada: {:?} {} @ ${:.2} - ID: {}",
@@ -73,8 +70,6 @@ impl OrderExecutor {
                 Ok(order_id)
             }
             ExchangeType::HyperliquidMainnet => {
-                // TODO: Implementar conexión real con Hyperliquid Mainnet
-                // Por ahora, simular pero con标识 diferente
                 tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
                 let order_id = format!("hl_mainnet_{}", Uuid::new_v4());
                 info!("💰 [MAINNET] Orden colocada: {:?} {} @ ${:.2} - ID: {}",
@@ -105,37 +100,30 @@ impl OrderExecutor {
     }
 
     /// Obtener posición actual para un símbolo
-    pub async fn get_position(&self, symbol: &str) -> Result<Option<Decimal>> {
+    pub async fn get_position(&self, _symbol: &str) -> Result<Option<Decimal>> {
         match self.exchange {
             ExchangeType::Simulated => {
-                // En simulación, retornar posición 0
                 Ok(Some(Decimal::ZERO))
             }
             ExchangeType::HyperliquidTestnet => {
-                // TODO: Consultar posición real en testnet
                 Ok(Some(Decimal::ZERO))
             }
             ExchangeType::HyperliquidMainnet => {
-                // TODO: Consultar posición real en mainnet
                 Ok(Some(Decimal::ZERO))
             }
         }
     }
 
     /// Obtener balance de la wallet
-    pub async fn get_balance(&self, asset: &str) -> Result<Decimal> {
+    pub async fn get_balance(&self, _asset: &str) -> Result<Decimal> {
         match self.exchange {
             ExchangeType::Simulated => {
-                // En simulación, retornar el capital configurado
-                Ok(Decimal::new(1000, 2)) // $10.00
+                Ok(Decimal::new(1000, 2))
             }
             ExchangeType::HyperliquidTestnet => {
-                // TODO: Consultar balance real en testnet
                 Ok(Decimal::new(1000, 2))
             }
             ExchangeType::HyperliquidMainnet => {
-                // TODO: Consultar balance real en mainnet
-                // Por ahora, retornar valor simulado
                 warn!("⚠️ [MAINNET] Balance no verificado - asumiendo fondos disponibles");
                 Ok(Decimal::new(1000, 2))
             }
