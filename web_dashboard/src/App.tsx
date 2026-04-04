@@ -11,6 +11,7 @@ import { MarketControls } from "./components/Controls/MarketControls";
 import { TelegramUsers } from "./components/Admin/TelegramUsers";
 import { useBotStore } from "./store/botStore";
 import { wsService } from "./services/websocket";
+import { backendWsUrl } from "./services/backendConfig";
 
 interface FillData {
   symbol: string;
@@ -350,7 +351,7 @@ function App() {
 
   useEffect(() => {
     console.log("🔌 Iniciando conexión WebSocket...");
-    wsService.connect("ws://localhost:3001/ws");
+    wsService.connect(backendWsUrl);
 
     wsService.subscribe("alert", (data: string) => {
       console.log("📥 Alerta recibida:", data);

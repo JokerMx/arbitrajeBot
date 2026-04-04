@@ -139,27 +139,30 @@ pub fn api_routes(
         .and_then(server::websocket_handler);
     
     // =============================================
-    // ARCHIVOS ESTÁTICOS DEL DASHBOARD
+    // ARCHIVOS ESTÁTICOS DEL DASHBOARD (SPA)
     // =============================================
     
-    let static_files = warp::path("dashboard")
-        .and(warp::fs::dir("./web_dashboard/dist"));
-    
+    // Servir /dashboard y /dashboard/ con el index del SPA
     let dashboard_index = warp::path("dashboard")
         .and(warp::path::end())
-        .and(warp::fs::file("./web_dashboard/dist/index.html"));
+        .and(warp::get())
+        .map(|| warp::reply::html(include_str!("../../web_dashboard/dist/index.html")));
+
+    // Fallback SPA para rutas cliente como /dashboard/stats
+    let dashboard_spa_fallback = warp::path("dashboard")
+        .and(warp::path::tail())
+        .and(warp::get())
+        .map(|_| warp::reply::html(include_str!("../../web_dashboard/dist/index.html")));
     
-    let dashboard_redirect = warp::path("dashboard")
-        .and(warp::path::end())
-        .map(|| {
-            warp::redirect::redirect(warp::http::Uri::from_static("/dashboard/"))
-        });
+    // Servir assets compilados sin pasar por la raíz del directorio dist
+    let static_assets = warp::path("dashboard")
+        .and(warp::path("assets"))
+        .and(warp::fs::dir("./web_dashboard/dist/assets"));
     
+    // Evitar redirecciones: servir dashboard directamente en /
     let root = warp::path::end()
         .and(warp::get())
-        .map(|| {
-            warp::redirect::redirect(warp::http::Uri::from_static("/dashboard/"))
-        });
+        .map(|| warp::reply::html(include_str!("../../web_dashboard/dist/index.html")));
     
     // =============================================
     // CORS
@@ -190,9 +193,9 @@ pub fn api_routes(
         .or(telegram_broadcast)
         .or(telegram_commands)
         .or(ws)
+        .or(static_assets)
         .or(dashboard_index)
-        .or(static_files)
-        .or(dashboard_redirect)
+        .or(dashboard_spa_fallback)
         .or(root)
         .with(cors)
         .recover(handlers::handle_rejection);

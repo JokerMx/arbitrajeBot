@@ -3,13 +3,15 @@
 use reqwest::Client;
 use serde_json::json;
 use serde::{Serialize, Deserialize};
-use tracing::{info, error, debug};
+use tracing::{info, error, debug, warn};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{self, Duration};
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use chrono::{Utc, DateTime};
+use std::fs;
+use std::path::PathBuf;
 
 use crate::risk::RiskManager;
 use crate::bot::TradingBot;
@@ -23,6 +25,8 @@ pub struct TelegramUser {
     pub subscribed: bool,
     pub authorized: bool,
     pub last_interaction: DateTime<Utc>,
+    #[serde(default)]
+    pub is_admin: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,6 +46,7 @@ pub struct TelegramBot {
     notifier: Arc<TelegramNotifier>,
     users: Arc<Mutex<Vec<TelegramUser>>>,
     admin_ids: Arc<Mutex<Vec<String>>>,
+    subscribers_file: PathBuf,
 }
 
 impl TelegramBot {
@@ -51,7 +56,13 @@ impl TelegramBot {
         bot: Arc<tokio::sync::Mutex<TradingBot>>,
         notifier: Arc<TelegramNotifier>,
     ) -> Self {
-        Self {
+        let subscribers_file = std::env::current_dir()
+            .unwrap_or_default()
+            .join("subscribers.json");
+        
+        info!("📁 Archivo de suscriptores: {:?}", subscribers_file);
+        
+        let bot_instance = Self {
             bot_token: bot_token.to_string(),
             client: Client::new(),
             risk_manager,
@@ -59,20 +70,97 @@ impl TelegramBot {
             notifier,
             users: Arc::new(Mutex::new(Vec::new())),
             admin_ids: Arc::new(Mutex::new(Vec::new())),
+            subscribers_file,
+        };
+        
+        // Cargar usuarios desde el archivo al iniciar
+        let bot_instance_clone = bot_instance.clone();
+        tokio::spawn(async move {
+            bot_instance_clone.load_users_from_file().await;
+        });
+        
+        bot_instance
+    }
+    
+    // =============================================
+    // CARGA DE USUARIOS DESDE ARCHIVO
+    // =============================================
+    
+    async fn load_users_from_file(&self) {
+        info!("📂 Cargando usuarios desde archivo...");
+        
+        if let Ok(content) = fs::read_to_string(&self.subscribers_file) {
+            // Intentar parsear como array de objetos (nuevo formato)
+            if let Ok(users) = serde_json::from_str::<Vec<TelegramUser>>(&content) {
+                let mut users_lock = self.users.lock().await;
+                *users_lock = users;
+                info!("✅ Cargados {} usuarios desde archivo (formato completo)", users_lock.len());
+                
+                // Actualizar admins
+                let mut admins = self.admin_ids.lock().await;
+                for user in users_lock.iter() {
+                    if user.is_admin {
+                        admins.push(user.chat_id.clone());
+                    }
+                }
+                return;
+            }
+            
+            // Intentar parsear como array de strings (formato antiguo)
+            if let Ok(chat_ids) = serde_json::from_str::<Vec<String>>(&content) {
+                let mut users_lock = self.users.lock().await;
+                for chat_id in chat_ids {
+                    if !users_lock.iter().any(|u| u.chat_id == chat_id) {
+                        users_lock.push(TelegramUser {
+                            chat_id: chat_id.clone(),
+                            username: format!("user_{}", chat_id),
+                            first_name: "Usuario".to_string(),
+                            subscribed: true,
+                            authorized: true,
+                            last_interaction: Utc::now(),
+                            is_admin: false,
+                        });
+                    }
+                }
+                info!("✅ Cargados {} usuarios desde archivo (formato legacy)", users_lock.len());
+                self.save_users_to_file().await;
+                return;
+            }
+            
+            warn!("⚠️ No se pudo parsear el archivo subscribers.json");
+        } else {
+            info!("📂 Archivo subscribers.json no encontrado, se creará automáticamente");
+            self.save_users_to_file().await;
         }
     }
-
+    
+    async fn save_users_to_file(&self) {
+        let users = self.users.lock().await;
+        if let Ok(content) = serde_json::to_string_pretty(&*users) {
+            if let Err(e) = fs::write(&self.subscribers_file, content) {
+                error!("❌ Error guardando usuarios en archivo: {}", e);
+            } else {
+                debug!("💾 Usuarios guardados en archivo");
+            }
+        }
+    }
+    
+    async fn sync_user_to_file(&self, _chat_id: &str) {
+        let users = self.users.lock().await;
+        if let Ok(content) = serde_json::to_string_pretty(&*users) {
+            let _ = fs::write(&self.subscribers_file, content);
+        }
+    }
+    
     // =============================================
     // API PÚBLICA PARA EL DASHBOARD
     // =============================================
 
-    /// Obtener todos los usuarios
     pub async fn get_users(&self) -> Vec<TelegramUser> {
         let users = self.users.lock().await;
         users.clone()
     }
 
-    /// Obtener estadísticas
     pub async fn get_stats(&self) -> TelegramStats {
         let users = self.users.lock().await;
         let now = Utc::now();
@@ -87,32 +175,33 @@ impl TelegramBot {
         }
     }
 
-    /// Autorizar un usuario
     pub async fn authorize_user(&self, chat_id: &str) -> Result<(), String> {
         let mut users = self.users.lock().await;
         if let Some(user) = users.iter_mut().find(|u| u.chat_id == chat_id) {
             user.authorized = true;
-            info!("✅ Usuario autorizado vía API: {}", chat_id);
+            drop(users);
+            self.sync_user_to_file(chat_id).await;
+            info!("✅ Usuario autorizado: {}", chat_id);
             Ok(())
         } else {
             Err("Usuario no encontrado".to_string())
         }
     }
 
-    /// Desautorizar un usuario
     pub async fn deauthorize_user(&self, chat_id: &str) -> Result<(), String> {
         let mut users = self.users.lock().await;
         if let Some(user) = users.iter_mut().find(|u| u.chat_id == chat_id) {
             user.authorized = false;
             user.subscribed = false;
-            info!("❌ Usuario desautorizado vía API: {}", chat_id);
+            drop(users);
+            self.sync_user_to_file(chat_id).await;
+            info!("❌ Usuario desautorizado: {}", chat_id);
             Ok(())
         } else {
             Err("Usuario no encontrado".to_string())
         }
     }
 
-    /// Suscribir un usuario
     pub async fn subscribe_user(&self, chat_id: &str) -> Result<(), String> {
         let mut users = self.users.lock().await;
         if let Some(user) = users.iter_mut().find(|u| u.chat_id == chat_id) {
@@ -120,39 +209,42 @@ impl TelegramBot {
                 return Err("Usuario debe estar autorizado primero".to_string());
             }
             user.subscribed = true;
-            info!("🔔 Usuario suscrito vía API: {}", chat_id);
+            drop(users);
+            self.sync_user_to_file(chat_id).await;
+            info!("🔔 Usuario suscrito: {}", chat_id);
             Ok(())
         } else {
             Err("Usuario no encontrado".to_string())
         }
     }
 
-    /// Desuscribir un usuario
     pub async fn unsubscribe_user(&self, chat_id: &str) -> Result<(), String> {
         let mut users = self.users.lock().await;
         if let Some(user) = users.iter_mut().find(|u| u.chat_id == chat_id) {
             user.subscribed = false;
-            info!("🔕 Usuario desuscrito vía API: {}", chat_id);
+            drop(users);
+            self.sync_user_to_file(chat_id).await;
+            info!("🔕 Usuario desuscrito: {}", chat_id);
             Ok(())
         } else {
             Err("Usuario no encontrado".to_string())
         }
     }
 
-    /// Eliminar un usuario
     pub async fn delete_user(&self, chat_id: &str) -> Result<(), String> {
         let mut users = self.users.lock().await;
         let initial_len = users.len();
         users.retain(|u| u.chat_id != chat_id);
         if users.len() < initial_len {
-            info!("🗑️ Usuario eliminado vía API: {}", chat_id);
+            drop(users);
+            self.sync_user_to_file(chat_id).await;
+            info!("🗑️ Usuario eliminado: {}", chat_id);
             Ok(())
         } else {
             Err("Usuario no encontrado".to_string())
         }
     }
 
-    /// Enviar broadcast a usuarios suscritos
     pub async fn broadcast_message(&self, message: &str) -> Result<usize, String> {
         let users = self.users.lock().await;
         let subscribed: Vec<String> = users
@@ -179,43 +271,73 @@ impl TelegramBot {
     // MÉTODOS DE ADMINISTRACIÓN
     // =============================================
 
-    /// Añadir un administrador
     pub async fn add_admin(&self, chat_id: &str) {
         let mut admins = self.admin_ids.lock().await;
         if !admins.contains(&chat_id.to_string()) {
             admins.push(chat_id.to_string());
             info!("👑 Nuevo administrador: {}", chat_id);
         }
+        
+        let mut users = self.users.lock().await;
+        if let Some(user) = users.iter_mut().find(|u| u.chat_id == chat_id) {
+            user.is_admin = true;
+        }
+        drop(users);
+        self.sync_user_to_file(chat_id).await;
     }
 
-    /// Verificar si un usuario es administrador
     async fn is_admin(&self, chat_id: &str) -> bool {
         let admins = self.admin_ids.lock().await;
-        admins.contains(&chat_id.to_string())
+        if admins.contains(&chat_id.to_string()) {
+            return true;
+        }
+        drop(admins);
+        
+        let users = self.users.lock().await;
+        users.iter().any(|u| u.chat_id == chat_id && u.is_admin)
     }
 
-    /// Obtener o crear usuario
     async fn get_or_create_user(&self, chat_id: &str, username: &str, first_name: &str) -> TelegramUser {
-        let mut users = self.users.lock().await;
+        let user_exists = {
+            let users = self.users.lock().await;
+            users.iter().find(|u| u.chat_id == chat_id).cloned()
+        };
         
-        if let Some(user) = users.iter_mut().find(|u| u.chat_id == chat_id) {
+        if let Some(mut user) = user_exists {
             user.last_interaction = Utc::now();
             user.username = username.to_string();
             user.first_name = first_name.to_string();
-            return user.clone();
+            
+            {
+                let mut users = self.users.lock().await;
+                if let Some(u) = users.iter_mut().find(|u| u.chat_id == chat_id) {
+                    u.last_interaction = user.last_interaction;
+                    u.username = user.username.clone();
+                    u.first_name = user.first_name.clone();
+                }
+            }
+            
+            return user;
         }
         
-        // Crear nuevo usuario
+        let is_admin = chat_id == "1974934581";
+        
         let new_user = TelegramUser {
             chat_id: chat_id.to_string(),
             username: username.to_string(),
             first_name: first_name.to_string(),
             subscribed: false,
-            authorized: false,
+            authorized: is_admin,
             last_interaction: Utc::now(),
+            is_admin,
         };
         
-        users.push(new_user.clone());
+        {
+            let mut users = self.users.lock().await;
+            users.push(new_user.clone());
+        }
+        
+        self.sync_user_to_file(chat_id).await;
         info!("👤 Nuevo usuario registrado: {} (@{})", chat_id, username);
         new_user
     }
@@ -297,7 +419,7 @@ impl TelegramBot {
         let risk = self.risk_manager.lock().await;
         let balance = risk.current_balance().to_f64().unwrap_or(0.0);
         let pnl = risk.total_pnl().to_f64().unwrap_or(0.0);
-        let initial = risk.initial_capital().to_f64().unwrap_or(10.0);
+        let initial = risk.initial_capital().to_f64().unwrap_or(50.0);
         drop(risk);
         
         format!(
@@ -397,35 +519,59 @@ impl TelegramBot {
     }
 
     async fn cmd_subscribe(&self, chat_id: &str) -> String {
-        let mut users = self.users.lock().await;
-        if let Some(user) = users.iter_mut().find(|u| u.chat_id == chat_id) {
-            if !user.authorized {
-                return "⛔ Necesitas autorización para suscribirte.".to_string();
-            }
-            if user.subscribed {
-                format!("⚠️ Ya estás suscrito, {}!", user.first_name)
-            } else {
-                user.subscribed = true;
+        let user_exists = {
+            let users = self.users.lock().await;
+            users.iter().find(|u| u.chat_id == chat_id).cloned()
+        };
+        
+        match user_exists {
+            Some(user) => {
+                if !user.authorized {
+                    return "⛔ Necesitas autorización para suscribirte.".to_string();
+                }
+                if user.subscribed {
+                    return format!("⚠️ Ya estás suscrito, {}!", user.first_name);
+                }
+                
+                {
+                    let mut users = self.users.lock().await;
+                    if let Some(u) = users.iter_mut().find(|u| u.chat_id == chat_id) {
+                        u.subscribed = true;
+                    }
+                }
+                
+                self.sync_user_to_file(chat_id).await;
                 info!("📱 Nuevo suscriptor: {}", chat_id);
                 format!("✅ Te has suscrito correctamente, {}!", user.first_name)
             }
-        } else {
-            "❌ Usuario no encontrado. Usa /start primero.".to_string()
+            None => "❌ Usuario no encontrado. Usa /start primero.".to_string(),
         }
     }
 
     async fn cmd_unsubscribe(&self, chat_id: &str) -> String {
-        let mut users = self.users.lock().await;
-        if let Some(user) = users.iter_mut().find(|u| u.chat_id == chat_id) {
-            if user.subscribed {
-                user.subscribed = false;
+        let user_exists = {
+            let users = self.users.lock().await;
+            users.iter().find(|u| u.chat_id == chat_id).cloned()
+        };
+        
+        match user_exists {
+            Some(user) => {
+                if !user.subscribed {
+                    return format!("⚠️ No estabas suscrito, {}!", user.first_name);
+                }
+                
+                {
+                    let mut users = self.users.lock().await;
+                    if let Some(u) = users.iter_mut().find(|u| u.chat_id == chat_id) {
+                        u.subscribed = false;
+                    }
+                }
+                
+                self.sync_user_to_file(chat_id).await;
                 info!("📱 Usuario desuscrito: {}", chat_id);
                 format!("✅ Te has desuscrito, {}!", user.first_name)
-            } else {
-                format!("⚠️ No estabas suscrito, {}!", user.first_name)
             }
-        } else {
-            "❌ Usuario no encontrado.".to_string()
+            None => "❌ Usuario no encontrado.".to_string(),
         }
     }
 
@@ -456,10 +602,8 @@ impl TelegramBot {
         
         info!("📨 Mensaje de @{} ({}): {}", username, chat_id, text);
         
-        // Registrar usuario
         let user = self.get_or_create_user(&chat_id, username, first_name).await;
         
-        // Procesar comandos
         let response = match text.as_str() {
             "/start" => self.cmd_start(&user).await,
             "/help" => self.cmd_help(&user).await,
@@ -505,10 +649,6 @@ impl TelegramBot {
         self.send_message_to_chat(&chat_id, &response).await?;
         Ok(())
     }
-
-    // =============================================
-    // MENSAJES
-    // =============================================
 
     async fn send_message_to_chat(&self, chat_id: &str, message: &str) -> Result<(), String> {
         let url = format!("https://api.telegram.org/bot{}/sendMessage", self.bot_token);
