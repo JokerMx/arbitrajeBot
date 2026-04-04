@@ -350,46 +350,43 @@ function App() {
   const [currentView, setCurrentView] = useState<string>("dashboard");
 
   useEffect(() => {
-    console.log("🔌 Iniciando conexión WebSocket...");
-    wsService.connect(backendWsUrl);
+  console.log("🔌 Iniciando conexión WebSocket...");
+  wsService.connect();  // Ya no necesita URL
 
-    wsService.subscribe("alert", (data: string) => {
-      console.log("📥 Alerta recibida:", data);
+  wsService.subscribe("alert", (data: string) => {
+    console.log("📥 Alerta recibida:", data);
+    
+    if (data.startsWith("📊 FILL:")) {
+      const parts = data.replace("📊 FILL:", "").split("|");
       
-      if (data.startsWith("📊 FILL:")) {
-        console.log("✅ Es un fill!");
-        const parts = data.replace("📊 FILL:", "").split("|");
+      if (parts.length >= 7) {
+        const [symbol, side, quantityStr, priceStr, pnlStr, timestamp, id] = parts;
         
-        if (parts.length >= 7) {
-          const [symbol, side, quantityStr, priceStr, pnlStr, timestamp, id] = parts;
-          
-          const newFill: FillData = {
-            symbol,
-            side,
-            quantity: parseFloat(quantityStr) || 0,
-            price: parseFloat(priceStr) || 0,
-            pnl: parseFloat(pnlStr) || 0,
-            timestamp: timestamp || new Date().toLocaleTimeString(),
-            id: id || `fill_${Date.now()}`,
-          };
-          
-          console.log("📊 Nuevo fill:", newFill);
-          
-          setFills(prev => {
-            if (prev.some(f => f.id === newFill.id)) {
-              return prev;
-            }
-            return [newFill, ...prev].slice(0, 7);
-          });
-        }
+        const newFill = {
+          symbol,
+          side,
+          quantity: parseFloat(quantityStr) || 0,
+          price: parseFloat(priceStr) || 0,
+          pnl: parseFloat(pnlStr) || 0,
+          timestamp: timestamp || new Date().toLocaleTimeString(),
+          id: id || `fill_${Date.now()}`,
+        };
+        
+        setFills(prev => {
+          if (prev.some(f => f.id === newFill.id)) {
+            return prev;
+          }
+          return [newFill, ...prev].slice(0, 7);
+        });
       }
-    });
+    }
+  });
 
-    return () => {
-      console.log("🔌 Cerrando conexión WebSocket...");
-      wsService.disconnect();
-    };
-  }, []);
+  return () => {
+    console.log("🔌 Cerrando conexión WebSocket...");
+    wsService.disconnect();
+  };
+}, []);
 
   const handleNavigate = (view: string) => {
     console.log("🔄 handleNavigate llamado con:", view);

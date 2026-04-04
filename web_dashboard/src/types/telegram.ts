@@ -5,6 +5,7 @@ export interface TelegramUser {
   subscribed: boolean;
   authorized: boolean;
   last_interaction: string;
+  is_admin?: boolean;
 }
 
 export interface TelegramStats {
@@ -18,10 +19,4 @@ export interface TelegramCommand {
   command: string;
   description: string;
   access: 'public' | 'authorized' | 'admin';
-}
-
-export interface BroadcastMessage {
-  message: string;
-  from_admin: string;
-  timestamp: string;
 }

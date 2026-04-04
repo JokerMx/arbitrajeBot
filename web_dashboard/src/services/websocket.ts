@@ -2,30 +2,31 @@ import { useBotStore } from "../store/botStore";
 import { WebSocketMessage } from "./types";
 import toast from "react-hot-toast";
 
+// Usar la URL absoluta
+const WS_URL = 'ws://localhost:3001/ws';
+
 class WebSocketService {
   private ws: WebSocket | null = null;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 10;
   private reconnectTimeout = 1000;
   private listeners: Map<string, Set<(data: any) => void>> = new Map();
-  private url: string = "";
   private pingInterval: number | null = null;
 
-  connect(url: string) {
-    console.log("🔌 WebSocketService.connect() llamado con URL:", url);
-    this.url = url;
+  connect() {
+    console.log("🔌 WebSocketService.connect() llamado a:", WS_URL);
     this.reconnectAttempts = 0;
     this.createConnection();
   }
 
   private createConnection() {
-    console.log("🔌 Intentando conectar a WebSocket:", this.url);
+    console.log("🔌 Intentando conectar a WebSocket:", WS_URL);
     
     try {
-      this.ws = new WebSocket(this.url);
+      this.ws = new WebSocket(WS_URL);
       
       this.ws.onopen = () => {
-        console.log("✅ WebSocket CONECTADO exitosamente a", this.url);
+        console.log("✅ WebSocket CONECTADO exitosamente");
         this.reconnectAttempts = 0;
         
         useBotStore.getState().setStatus({
@@ -36,78 +37,50 @@ class WebSocketService {
         });
         
         toast.success("Conectado al bot");
-        console.log("📊 Enviando ping inicial...");
         
         this.pingInterval = window.setInterval(() => {
           if (this.ws?.readyState === WebSocket.OPEN) {
-            console.log("📤 Enviando ping...");
             this.ws.send(JSON.stringify({ type: "ping" }));
-          } else {
-            console.warn("⚠️ WebSocket no está abierto, no se puede enviar ping");
           }
         }, 15000);
       };
 
       this.ws.onmessage = (event) => {
-        console.log("📥 Mensaje RECIBIDO del WebSocket:", event.data.substring(0, 150) + "...");
-        
         try {
           const message: WebSocketMessage = JSON.parse(event.data);
-          console.log("📦 Mensaje parseado:", message.type);
           
           if (message.type === "stats") {
-            console.log("📊 Stats RECIBIDOS del servidor (raw):", message.data);
-            
-            // Verificar qué campos vienen del servidor
-            console.log("   Campos en raw:", Object.keys(message.data));
-            console.log("   win_rate:", message.data.win_rate);
-            console.log("   winning_trades:", message.data.winning_trades);
-            console.log("   losing_trades:", message.data.losing_trades);
-            console.log("   total_trades:", message.data.total_trades);
-            
-            // MAPEO: Convertir de snake_case (backend) a camelCase (frontend)
             const mappedStats = {
               balance: message.data.balance || 0,
               pnl: message.data.pnl || 0,
               pnlPercent: message.data.pnl_percent || 0,
               dailyPnl: message.data.daily_pnl || 0,
               drawdown: message.data.drawdown || 0,
-              winRate: message.data.win_rate || 0,                    // snake_case → camelCase
+              winRate: message.data.win_rate || 0,
               totalTrades: message.data.total_trades || 0,
-              winningTrades: message.data.winning_trades || 0,        // snake_case → camelCase
-              losingTrades: message.data.losing_trades || 0,          // snake_case → camelCase
+              winningTrades: message.data.winning_trades || 0,
+              losingTrades: message.data.losing_trades || 0,
               volume: message.data.volume || 0,
               positions: message.data.positions || [],
               trades: message.data.trades || [],
               history: message.data.history || [],
             };
             
-            console.log("📊 Stats mapeados a camelCase:", mappedStats);
-            console.log("   winRate (mapeado):", mappedStats.winRate);
-            console.log("   winningTrades (mapeado):", mappedStats.winningTrades);
-            console.log("   losingTrades (mapeado):", mappedStats.losingTrades);
-            
-            // Actualizar el store
             useBotStore.getState().setStats(mappedStats);
-            console.log("✅ Stats actualizados en el store");
             
           } else if (message.type === "alert") {
-            console.log("⚠️ Alerta recibida:", message.data);
             const listeners = this.listeners.get("alert");
             if (listeners) {
               listeners.forEach((callback) => callback(message.data));
             }
-          } else {
-            console.log("❓ Tipo de mensaje desconocido:", message.type, message);
           }
         } catch (error) {
           console.error("❌ Error parseando mensaje:", error);
-          console.error("   Data original:", event.data);
         }
       };
 
-      this.ws.onclose = (event) => {
-        console.log("🔌 WebSocket CERRADO. Código:", event.code, "Razón:", event.reason);
+      this.ws.onclose = () => {
+        console.log("🔌 WebSocket CERRADO");
         
         if (this.pingInterval) {
           clearInterval(this.pingInterval);
@@ -121,7 +94,6 @@ class WebSocketService {
           uptime: 0,
         });
         
-        console.log("🔄 Intentando reconectar...");
         this.reconnect();
       };
 
@@ -153,15 +125,11 @@ class WebSocketService {
 
   public send(type: string, data: any) {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      console.log("📤 Enviando mensaje:", type);
       this.ws.send(JSON.stringify({ type, data }));
-    } else {
-      console.warn("⚠️ WebSocket no conectado, mensaje no enviado:", type);
     }
   }
 
   public subscribe(type: string, callback: (data: any) => void) {
-    console.log("📻 Suscribiendo a tipo:", type);
     if (!this.listeners.has(type)) {
       this.listeners.set(type, new Set());
     }
@@ -176,7 +144,6 @@ class WebSocketService {
   }
 
   public disconnect() {
-    console.log("🔌 Desconectando WebSocket manualmente...");
     if (this.pingInterval) {
       clearInterval(this.pingInterval);
       this.pingInterval = null;

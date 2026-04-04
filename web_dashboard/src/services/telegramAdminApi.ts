@@ -1,9 +1,8 @@
 import axios from 'axios';
 import { TelegramUser, TelegramStats, TelegramCommand } from '../types/telegram';
-import toast from 'react-hot-toast';
-import { backendApiBaseUrl } from './backendConfig';
 
-const API_BASE = backendApiBaseUrl;
+// Usar la URL absoluta en lugar de relativa
+const API_BASE = 'http://localhost:3001/api';
 
 class TelegramAdminApi {
   private async request<T>(
@@ -21,53 +20,47 @@ class TelegramAdminApi {
         },
       });
       return response.data;
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error en petición Telegram:', error);
+      if (error.response) {
+        console.error('Respuesta del servidor:', error.response.data);
+      }
       throw error;
     }
   }
 
-  // Obtener lista de usuarios
   async getUsers(): Promise<TelegramUser[]> {
     return this.request('get', '/users');
   }
 
-  // Obtener estadísticas
   async getStats(): Promise<TelegramStats> {
     return this.request('get', '/stats');
   }
 
-  // Autorizar un usuario
   async authorizeUser(chatId: string): Promise<{ success: boolean; message: string }> {
     return this.request('post', `/users/${chatId}/authorize`);
   }
 
-  // Desautorizar un usuario
   async deauthorizeUser(chatId: string): Promise<{ success: boolean; message: string }> {
     return this.request('post', `/users/${chatId}/deauthorize`);
   }
 
-  // Suscribir un usuario
   async subscribeUser(chatId: string): Promise<{ success: boolean; message: string }> {
     return this.request('post', `/users/${chatId}/subscribe`);
   }
 
-  // Desuscribir un usuario
   async unsubscribeUser(chatId: string): Promise<{ success: boolean; message: string }> {
     return this.request('post', `/users/${chatId}/unsubscribe`);
   }
 
-  // Eliminar un usuario
   async deleteUser(chatId: string): Promise<{ success: boolean; message: string }> {
     return this.request('delete', `/users/${chatId}`);
   }
 
-  // Enviar broadcast
   async sendBroadcast(message: string): Promise<{ success: boolean; message: string; sent: number }> {
     return this.request('post', '/broadcast', { message });
   }
 
-  // Obtener comandos
   async getCommands(): Promise<TelegramCommand[]> {
     return this.request('get', '/commands');
   }

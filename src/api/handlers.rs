@@ -10,6 +10,7 @@ use crate::risk::RiskManager;
 use crate::types::{StrategyConfig, RiskConfig, MarketConfig};
 use crate::notifier::TelegramNotifier;
 use crate::telegram_bot::TelegramBot;
+use crate::db::ConfigRepository;
 use super::models::*;
 
 // =============================================
@@ -25,6 +26,8 @@ pub struct ApiState {
     pub market_configs: Arc<Mutex<Vec<MarketConfig>>>,
     pub notifier: Arc<TelegramNotifier>,
     pub telegram_bot: Option<Arc<TelegramBot>>,
+    pub config_repo: Option<Arc<ConfigRepository>>,
+    pub bot_start_time: std::time::Instant,
 }
 
 // =============================================
