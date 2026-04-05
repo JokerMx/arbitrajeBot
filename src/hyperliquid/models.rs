@@ -25,12 +25,3 @@ pub struct HyperliquidAccountState {
     pub balances: HashMap<String, Decimal>,
     pub wallet_address: String,
 }
-
-/// Información de mercado
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HyperliquidMarketInfo {
-    pub symbol: String,
-    pub mark_price: Decimal,
-    pub index_price: Decimal,
-    pub open_interest: Decimal,
-}

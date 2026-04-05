@@ -61,13 +61,12 @@ impl TradingBot {
     ) -> anyhow::Result<Self> {
         info!("Inicializando TradingBot en red: {}", config.network);
         
-        let is_testnet = config.network == "testnet";
-        let executor = Arc::new(OrderExecutor::new(
-            &config.private_key,
-            is_testnet,
-            exchange_type,
-        ).await?);
         
+    let executor = Arc::new(OrderExecutor::new(
+    &config.private_key,
+    exchange_type,  // ExchangeType se pasa desde main
+).await?);
+
         let mut markets = HashMap::new();
         for market_config in market_configs {
             if !market_config.enabled {

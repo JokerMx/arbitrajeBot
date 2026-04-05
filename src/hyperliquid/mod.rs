@@ -1,4 +1,4 @@
-//! Módulo de integración con Hyperliquid
+//! Módulo de integración con Hyperliquid (API REST)
 
 pub mod client;
 pub mod models;

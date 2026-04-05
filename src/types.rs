@@ -174,8 +174,10 @@ pub struct BookLevel {
 
 /// Configuración del mercado
 #[derive(Debug, Clone, Deserialize)]
+// Dentro de MarketConfig, agrega:
 pub struct MarketConfig {
     pub symbol: String,
+    pub asset_index: u32,
     pub enabled: bool,
     pub margin_alloc: f64,
     pub min_size: f64,
