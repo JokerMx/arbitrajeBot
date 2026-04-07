@@ -4,7 +4,6 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 
-/// Side de la orden
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OrderSide {
     Buy,
@@ -20,14 +19,12 @@ impl std::fmt::Display for OrderSide {
     }
 }
 
-/// Tipo de orden
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OrderType {
     Market,
     Limit,
 }
 
-/// Time in force
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TimeInForce {
     GoodTillCancel,
@@ -35,7 +32,6 @@ pub enum TimeInForce {
     FillOrKill,
 }
 
-/// Estructura de posición
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Position {
     pub symbol: String,
@@ -90,30 +86,27 @@ impl Position {
     pub fn is_flat(&self) -> bool {
         self.size == Decimal::ZERO
     }
-    
+
     pub fn close_position(&mut self, close_price: Decimal, close_size: Decimal) -> Decimal {
         let size_to_close = close_size.abs().min(self.size.abs());
         let pnl = size_to_close * (close_price - self.entry_price) * if self.is_long() { Decimal::ONE } else { -Decimal::ONE };
-        
         self.realized_pnl += pnl;
         self.size = if self.is_long() {
             self.size - size_to_close
         } else {
             self.size + size_to_close
         };
-        
         if self.size == Decimal::ZERO {
             self.entry_price = Decimal::ZERO;
         }
-        
         pnl
     }
 }
 
-/// Request de orden
 #[derive(Debug, Clone)]
 pub struct OrderRequest {
     pub symbol: String,
+    pub asset_index: u32,
     pub side: OrderSide,
     pub order_type: OrderType,
     pub quantity: Decimal,
@@ -124,9 +117,10 @@ pub struct OrderRequest {
 }
 
 impl OrderRequest {
-    pub fn limit(symbol: &str, side: OrderSide, quantity: Decimal, price: Decimal) -> Self {
+    pub fn limit(symbol: &str, asset_index: u32, side: OrderSide, quantity: Decimal, price: Decimal) -> Self {
         Self {
             symbol: symbol.to_string(),
+            asset_index,
             side,
             order_type: OrderType::Limit,
             quantity,
@@ -137,9 +131,10 @@ impl OrderRequest {
         }
     }
 
-    pub fn market(symbol: &str, side: OrderSide, quantity: Decimal) -> Self {
+    pub fn market(symbol: &str, asset_index: u32, side: OrderSide, quantity: Decimal) -> Self {
         Self {
             symbol: symbol.to_string(),
+            asset_index,
             side,
             order_type: OrderType::Market,
             quantity,
@@ -156,7 +151,6 @@ impl OrderRequest {
     }
 }
 
-/// Libro de órdenes nivel 2
 #[derive(Debug, Clone)]
 pub struct L2Book {
     pub coin: String,
@@ -172,9 +166,7 @@ pub struct BookLevel {
     pub n: u64,
 }
 
-/// Configuración del mercado
 #[derive(Debug, Clone, Deserialize)]
-// Dentro de MarketConfig, agrega:
 pub struct MarketConfig {
     pub symbol: String,
     pub asset_index: u32,
@@ -185,7 +177,6 @@ pub struct MarketConfig {
     pub size_decimals: u32,
 }
 
-/// Configuración de estrategia
 #[derive(Debug, Clone, Deserialize)]
 pub struct StrategyConfig {
     pub name: String,
@@ -198,17 +189,15 @@ pub struct StrategyConfig {
     pub max_inventory_ratio: f64,
 }
 
-/// Configuración de riesgo (en porcentajes)
 #[derive(Debug, Clone, Deserialize)]
 pub struct RiskConfig {
-    pub max_position_size_pct: f64,      // % del capital actual
-    pub max_daily_loss_pct: f64,         // % del capital inicial
+    pub max_position_size_pct: f64,
+    pub max_daily_loss_pct: f64,
     pub max_drawdown_pct: f64,
     pub kill_switch_enabled: bool,
     pub circuit_breaker_threshold: f64,
 }
 
-/// Estado de riesgo
 #[derive(Debug, Clone, PartialEq)]
 pub enum RiskStatus {
     Normal,
@@ -217,7 +206,6 @@ pub enum RiskStatus {
     KillSwitchEngaged,
 }
 
-/// Trade ejecutado
 #[derive(Debug, Clone)]
 pub struct Trade {
     pub symbol: String,

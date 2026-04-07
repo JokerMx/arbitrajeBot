@@ -19,7 +19,6 @@ rand = "0.8"
 reqwest = { version = "0.11", features = ["json"] }
 uuid = { version = "1.10", features = ["v4"] }
 hex = "0.4"
-ethers = { version = "2.0", features = ["rustls"] }
 
 # API
 warp = "0.3"
@@ -30,9 +29,9 @@ tokio-stream = "0.1"
 # Base de datos
 sqlx = { version = "0.7", features = ["runtime-tokio-native-tls", "mysql", "chrono", "uuid", "json"] }
 
-# Criptografía para firmas (usando secp256k1)
-secp256k1 = { version = "0.28", features = ["recovery", "global-context"] }
-sha3 = "0.10"
+# Hyperliquid SDK (mainnet API + firma EIP-712)
+hypersdk = "0.2"
+either = "1.13"
 
 [profile.release]
 lto = true

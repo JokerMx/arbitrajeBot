@@ -153,7 +153,9 @@ async fn main() -> anyhow::Result<()> {
     info!("🎯 Spread base: {} ticks", strategy_config.base_spread_ticks);
     info!("🌐 Red: {}", network);
     info!("🗄️ Persistencia: MariaDB con prefijo '{}'", db.config.table_prefix);
-
+    let exchange_type_str = env::var("EXCHANGE_TYPE").unwrap_or_else(|_| "simulated".to_string());
+    println!("🔧 EXCHANGE_TYPE leído: '{}'", exchange_type_str);
+    info!("🔄 Modo de exchange: {}", exchange_type_str);
     if let ExchangeType::HyperliquidMainnet = exchange_type {
         info!("⚠️ ⚠️ ⚠️ IMPORTANTE ⚠️ ⚠️ ⚠️");
         info!("   ESTÁS OPERANDO EN MAINNET CON DINERO REAL");
@@ -194,6 +196,18 @@ async fn main() -> anyhow::Result<()> {
     // EJECUTOR (con API REST + firma)
     // =============================================
     let executor = Arc::new(executor::OrderExecutor::new(&private_key, exchange_type).await?);
+
+    // Si es mainnet, obtener asset_index de los mercados reales
+    if matches!(exchange_type, executor::ExchangeType::HyperliquidMainnet) {
+        for market in &mut market_configs {
+            if let Some(asset_idx) = executor.get_asset_index(&market.symbol) {
+                market.asset_index = asset_idx;
+                info!("✅ {} tiene asset_index: {}", market.symbol, asset_idx);
+            } else {
+                warn!("⚠️ No se encontró mercado real para {}", market.symbol);
+            }
+        }
+    }
 
     // =============================================
     // TRADING BOT

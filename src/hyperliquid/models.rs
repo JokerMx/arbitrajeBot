@@ -1,4 +1,4 @@
-//! Modelos para Hyperliquid API
+//! Modelos para Hyperliquid API (usando hypersdk)
 
 use rust_decimal::Decimal;
 use serde::{Serialize, Deserialize};

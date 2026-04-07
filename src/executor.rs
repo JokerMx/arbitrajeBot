@@ -1,10 +1,9 @@
-//! Ejecutor de órdenes reales usando API REST de Hyperliquid con firma
+//! Ejecutor de órdenes reales usando hypersdk (EIP-712)
 
 use anyhow::{Result, anyhow};
 use rust_decimal::Decimal;
-use tracing::info;   // ← Agregado
+use tracing::info; // <-- AÑADIR ESTA LÍNEA
 use uuid::Uuid;
-
 use crate::types::OrderRequest;
 use crate::hyperliquid::{HyperliquidClient, HyperliquidOrderSide};
 
@@ -27,9 +26,9 @@ impl OrderExecutor {
                 Ok(Self { exchange, client: None })
             }
             ExchangeType::HyperliquidMainnet => {
-                info!("🌐 Conectando a Hyperliquid MAINNET real vía API REST con firma...");
+                info!("🌐 Conectando a Hyperliquid MAINNET con hypersdk...");
                 let client = HyperliquidClient::new(private_key, true).await?;
-                info!("✅ Cliente Hyperliquid inicializado (API REST + firma)");
+                info!("✅ Cliente Hyperliquid inicializado (EIP-712)");
                 Ok(Self { exchange, client: Some(client) })
             }
         }
@@ -57,7 +56,7 @@ impl OrderExecutor {
                     crate::types::OrderSide::Sell => HyperliquidOrderSide::Sell,
                 };
                 let response = client
-                    .place_limit_order(&order.symbol, side, order.quantity, price)
+                    .place_limit_order(order.asset_index, side, order.quantity, price)
                     .await?;
                 if response.success {
                     info!(
@@ -80,7 +79,7 @@ impl OrderExecutor {
             }
             ExchangeType::HyperliquidMainnet => {
                 info!("🗑️ [MAINNET] Cancelando orden: {}", order_id);
-                // TODO: implementar cancelación real (requiere firma también)
+                // TODO: implementar cancelación real si es necesario
                 Ok(())
             }
         }
@@ -111,6 +110,47 @@ impl OrderExecutor {
             }
             _ => Ok(Decimal::ZERO)
         }
+    }
+
+    pub async fn get_mid_price(&self, symbol: &str) -> Result<Option<Decimal>> {
+        match self.exchange {
+            ExchangeType::HyperliquidMainnet => {
+                if let Some(client) = &self.client {
+                    Ok(Some(client.get_mid_price(symbol).await?))
+                } else {
+                    Ok(None)
+                }
+            }
+            _ => Ok(None)
+        }
+    }
+
+    pub fn round_price(&self, symbol: &str, price: Decimal) -> Option<Decimal> {
+        if let Some(client) = &self.client {
+            client.round_price(symbol, price)
+        } else {
+            Some(price)
+        }
+    }
+
+    pub fn round_size(&self, symbol: &str, size: Decimal) -> Option<Decimal> {
+        if let Some(client) = &self.client {
+            client.round_size(symbol, size)
+        } else {
+            Some(size)
+        }
+    }
+
+    pub fn get_asset_index(&self, symbol: &str) -> Option<u32> {
+        if let Some(client) = &self.client {
+            client.get_market_info(symbol).map(|m| m.index as u32)
+        } else {
+            None
+        }
+    }
+
+    pub fn is_mainnet(&self) -> bool {
+        matches!(self.exchange, ExchangeType::HyperliquidMainnet)
     }
 
     pub async fn shutdown(&self) -> Result<()> {

@@ -76,12 +76,14 @@ impl TradingBot {
             info!("Configurando market maker para {}", market_config.symbol);
             
             let strategy = AvellanedaStoikov::new(strategy_config.clone());
+            let is_mainnet = matches!(exchange_type, ExchangeType::HyperliquidMainnet);
             let market = MarketManager::new(
                 market_config.clone(),
                 strategy,
                 risk_manager.clone(),
                 executor.clone(),
                 notifier.clone(),
+                is_mainnet,
             );
             
             markets.insert(market_config.symbol.clone(), market);
@@ -108,8 +110,13 @@ impl TradingBot {
         Ok(())
     }
 
-    pub async fn update_markets(&mut self) {
+    pub async fn update_markets(&mut self, market_configs: &[MarketConfig]) {
         for market in self.markets.values_mut() {
+            let enabled = market_configs.iter()
+                .find(|m| m.symbol == market.symbol)
+                .map(|m| m.enabled)
+                .unwrap_or(true);
+            market.set_enabled(enabled);
             market.update_market_data().await;
         }
     }
@@ -194,7 +201,15 @@ impl TradingBot {
         loop {
             tokio::select! {
                 _ = update_interval.tick() => {
-                    self.update_markets().await;
+                    let configs = self.markets.iter()
+                        .map(|(symbol, _)| {
+                            market_configs.iter()
+                                .find(|m| &m.symbol == symbol)
+                                .cloned()
+                        })
+                        .flatten()
+                        .collect::<Vec<_>>();
+                    self.update_markets(&configs).await;
                 }
                 _ = &mut ctrl_c => {
                     info!("📡 Recibida señal Ctrl+C, deteniendo...");
