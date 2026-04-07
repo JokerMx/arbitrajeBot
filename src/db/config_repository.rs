@@ -5,12 +5,17 @@ use anyhow::Result;
 use tracing::{info, debug};
 use rust_decimal::Decimal;
 use std::str::FromStr;
+use std::str::FromStr as _;
 
 use super::{Database, models::*};
 
 pub struct ConfigRepository {
     pool: MySqlPool,
     table_prefix: String,
+}
+
+fn read_env_or_default<T: FromStr>(key: &str, default: T) -> T {
+    std::env::var(key).unwrap_or_default().parse().unwrap_or(default)
 }
 
 impl ConfigRepository {
@@ -445,6 +450,9 @@ impl ConfigRepository {
         let markets = self.get_markets().await?;
         let telegram = self.get_or_create_telegram_config().await?;
         let initial_capital = self.get_or_create_initial_capital().await?;
+        let protection = self.get_protection_config().await?;
+        
+        let leverage = self.get_default_leverage_configs().await?;
         
         Ok(FullConfigDB {
             initial_capital,
@@ -452,8 +460,25 @@ impl ConfigRepository {
             risk,
             markets,
             telegram,
+            leverage,
+            protection,
             updated_at: None,
         })
+    }
+    
+    async fn get_default_leverage_configs(&self) -> Result<Vec<LeverageConfigDB>> {
+        let symbols = vec!["BTC", "ETH", "BNB", "SOL", "XRP"];
+        let exchanges = vec!["simulated", "hyperliquid_mainnet", "bybit"];
+        
+        let mut configs = Vec::new();
+        for exchange in exchanges {
+            for symbol in &symbols {
+                let lev = self.get_leverage(exchange, symbol).await?;
+                configs.push(lev);
+            }
+        }
+        
+        Ok(configs)
     }
     
     /// Guardar configuración completa
@@ -472,7 +497,130 @@ impl ConfigRepository {
             ).await?;
         }
         
+        for lev in &config.leverage {
+            self.update_leverage(&lev.exchange, &lev.symbol, lev.leverage, lev.max_leverage).await?;
+        }
+        
+        self.update_protection_config(&config.protection).await?;
+        
         info!("✅ Configuración completa guardada en BD");
+        Ok(())
+    }
+    
+    /// Obtener apalancamiento por símbolo
+    pub async fn get_leverage(&self, exchange: &str, symbol: &str) -> Result<LeverageConfigDB> {
+        let table = format!("{}leverage", self.table_prefix);
+        
+        let row = sqlx::query(&format!(
+            r#"SELECT CAST(leverage AS CHAR), CAST(max_leverage AS CHAR) FROM `{}` WHERE exchange = ? AND symbol = ?"#,
+            table
+        ))
+        .bind(exchange)
+        .bind(symbol)
+        .fetch_optional(&self.pool)
+        .await?;
+        
+        if let Some(row) = row {
+            let leverage_str: String = row.get(0);
+            let max_leverage_str: String = row.get(1);
+            
+            Ok(LeverageConfigDB {
+                exchange: exchange.to_string(),
+                symbol: symbol.to_string(),
+                leverage: leverage_str.parse().unwrap_or(1),
+                max_leverage: max_leverage_str.parse().unwrap_or(10),
+            })
+        } else {
+            let env_key = format!("LEVERAGE_{}_{}", exchange.to_uppercase(), symbol.to_uppercase());
+            let leverage = std::env::var(&env_key)
+                .unwrap_or_else(|_| "1".to_string())
+                .parse()
+                .unwrap_or(1);
+            let max_leverage = read_env_or_default("MAX_ALLOWABLE_LEVERAGE", 10);
+            
+            Ok(LeverageConfigDB {
+                exchange: exchange.to_string(),
+                symbol: symbol.to_string(),
+                leverage,
+                max_leverage,
+            })
+        }
+    }
+    
+    /// Actualizar apalancamiento
+    pub async fn update_leverage(&self, exchange: &str, symbol: &str, leverage: i32, max_leverage: i32) -> Result<()> {
+        let table = format!("{}leverage", self.table_prefix);
+        let max_leverage = max_leverage.max(1).min(100);
+        let leverage = leverage.max(1).min(max_leverage);
+        
+        sqlx::query(&format!(
+            r#"INSERT INTO `{}` (exchange, symbol, leverage, max_leverage) VALUES (?, ?, ?, ?)
+               ON DUPLICATE KEY UPDATE leverage = ?, max_leverage = ?"#,
+            table
+        ))
+        .bind(exchange)
+        .bind(symbol)
+        .bind(leverage)
+        .bind(max_leverage)
+        .bind(leverage)
+        .bind(max_leverage)
+        .execute(&self.pool)
+        .await?;
+        
+        info!("✅ Apalancamiento {} {}: {}x", exchange, symbol, leverage);
+        Ok(())
+    }
+    
+    /// Obtener configuración de protección
+    pub async fn get_protection_config(&self) -> Result<ProtectionConfigDB> {
+        let table = format!("{}protection", self.table_prefix);
+        
+        let row = sqlx::query(&format!(
+            r#"SELECT CAST(max_capital_at_risk_pct AS CHAR), auto_stop_loss_enabled, CAST(auto_stop_loss_pct AS CHAR), max_leverage, emergency_withdraw_enabled FROM `{}` WHERE id = 1"#,
+            table
+        ))
+        .fetch_optional(&self.pool)
+        .await?;
+        
+        if let Some(row) = row {
+            let max_capital_str: String = row.get(0);
+            let stop_loss_str: String = row.get(2);
+            
+            Ok(ProtectionConfigDB {
+                max_capital_at_risk_pct: Decimal::from_str(&max_capital_str).unwrap_or(Decimal::new(25, 2)),
+                auto_stop_loss_enabled: row.get(1),
+                auto_stop_loss_pct: Decimal::from_str(&stop_loss_str).unwrap_or(Decimal::new(15, 2)),
+                max_leverage: row.get(3),
+                emergency_withdraw_enabled: row.get(4),
+            })
+        } else {
+            Ok(ProtectionConfigDB::default())
+        }
+    }
+    
+    /// Actualizar configuración de protección
+    pub async fn update_protection_config(&self, config: &ProtectionConfigDB) -> Result<()> {
+        let table = format!("{}protection", self.table_prefix);
+        
+        sqlx::query(&format!(
+            r#"UPDATE `{}` SET 
+                max_capital_at_risk_pct = ?,
+                auto_stop_loss_enabled = ?,
+                auto_stop_loss_pct = ?,
+                max_leverage = ?,
+                emergency_withdraw_enabled = ?
+               WHERE id = 1"#,
+            table
+        ))
+        .bind(config.max_capital_at_risk_pct.to_string())
+        .bind(config.auto_stop_loss_enabled)
+        .bind(config.auto_stop_loss_pct.to_string())
+        .bind(config.max_leverage)
+        .bind(config.emergency_withdraw_enabled)
+        .execute(&self.pool)
+        .await?;
+        
+        info!("✅ Configuración de protección actualizada");
         Ok(())
     }
 }

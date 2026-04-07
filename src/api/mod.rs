@@ -14,6 +14,7 @@ use crate::types::{StrategyConfig, RiskConfig, MarketConfig};
 use crate::notifier::TelegramNotifier;
 use crate::telegram_bot::TelegramBot;
 use crate::db::ConfigRepository;
+use crate::db::models::ProtectionConfigDB;
 
 
 pub fn api_routes(
@@ -26,6 +27,9 @@ pub fn api_routes(
     telegram_bot: Option<Arc<TelegramBot>>,
     config_repo: Arc<ConfigRepository>,
     exchange_type: String,
+    protection_config: ProtectionConfigDB,
+    leverage_configs: Arc<Mutex<std::collections::HashMap<String, i32>>>,
+    protection_arc: Arc<Mutex<ProtectionConfigDB>>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     
     let exchange_type_arc = Arc::new(Mutex::new(exchange_type));
@@ -41,6 +45,8 @@ pub fn api_routes(
         config_repo: Some(config_repo),
         bot_start_time: std::time::Instant::now(),
         exchange_type: exchange_type_arc,
+        leverage_configs,
+        protection_config: protection_arc,
     };
     
     let state_filter = warp::any().map(move || state.clone());

@@ -5,7 +5,9 @@ import {
   StrategyConfig, 
   RiskConfig, 
   MarketConfig, 
-  TelegramConfig 
+  TelegramConfig,
+  LeverageConfig,
+  ProtectionConfig
 } from "../services/types";
 import { backendApiBaseUrl } from "../services/backendConfig";
 
@@ -42,6 +44,30 @@ const DEFAULT_CONFIG: FullConfig = {
     notifyStatus: true,
   },
   initialCapital: 50,
+  leverage: [
+    { exchange: "simulated", symbol: "BTC", leverage: 1, maxLeverage: 10 },
+    { exchange: "simulated", symbol: "ETH", leverage: 1, maxLeverage: 10 },
+    { exchange: "simulated", symbol: "BNB", leverage: 1, maxLeverage: 10 },
+    { exchange: "simulated", symbol: "SOL", leverage: 1, maxLeverage: 10 },
+    { exchange: "simulated", symbol: "XRP", leverage: 1, maxLeverage: 10 },
+    { exchange: "hyperliquid_mainnet", symbol: "BTC", leverage: 1, maxLeverage: 10 },
+    { exchange: "hyperliquid_mainnet", symbol: "ETH", leverage: 1, maxLeverage: 10 },
+    { exchange: "hyperliquid_mainnet", symbol: "BNB", leverage: 1, maxLeverage: 10 },
+    { exchange: "hyperliquid_mainnet", symbol: "SOL", leverage: 1, maxLeverage: 10 },
+    { exchange: "hyperliquid_mainnet", symbol: "XRP", leverage: 1, maxLeverage: 10 },
+    { exchange: "bybit", symbol: "BTC", leverage: 1, maxLeverage: 10 },
+    { exchange: "bybit", symbol: "ETH", leverage: 1, maxLeverage: 10 },
+    { exchange: "bybit", symbol: "BNB", leverage: 1, maxLeverage: 10 },
+    { exchange: "bybit", symbol: "SOL", leverage: 1, maxLeverage: 10 },
+    { exchange: "bybit", symbol: "XRP", leverage: 1, maxLeverage: 10 },
+  ],
+  protection: {
+    maxCapitalAtRiskPct: 0.25,
+    autoStopLossEnabled: true,
+    autoStopLossPct: 0.15,
+    maxLeverage: 10,
+    emergencyWithdrawEnabled: false,
+  },
 };
 
 interface ConfigStore {
@@ -53,6 +79,8 @@ interface ConfigStore {
   updateRisk: (risk: Partial<RiskConfig>) => Promise<void>;
   updateMarket: (symbol: string, updates: Partial<MarketConfig>) => Promise<void>;
   updateTelegram: (telegram: Partial<TelegramConfig>) => Promise<void>;
+  updateLeverage: (leverage: LeverageConfig[]) => Promise<void>;
+  updateProtection: (protection: Partial<ProtectionConfig>) => Promise<void>;
   loadConfig: () => Promise<void>;
   saveConfig: () => Promise<void>;
   resetConfig: () => void;
@@ -102,6 +130,26 @@ export const useConfigStore = create<ConfigStore>()(
           config: {
             ...state.config,
             telegram: { ...state.config.telegram, ...telegram },
+          },
+        }));
+        await get().saveConfig();
+      },
+
+      updateLeverage: async (leverage) => {
+        set((state) => ({
+          config: {
+            ...state.config,
+            leverage,
+          },
+        }));
+        await get().saveConfig();
+      },
+
+      updateProtection: async (protection) => {
+        set((state) => ({
+          config: {
+            ...state.config,
+            protection: { ...state.config.protection, ...protection },
           },
         }));
         await get().saveConfig();

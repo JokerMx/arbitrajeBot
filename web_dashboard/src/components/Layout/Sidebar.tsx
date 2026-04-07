@@ -61,9 +61,10 @@ const SidebarItem: React.FC<SidebarItemProps> = ({
 interface SidebarProps {
   onNavigate: (view: string) => void;
   currentView: string;
+  children?: React.ReactNode;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ onNavigate, currentView }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ onNavigate, currentView, children }) => {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -180,7 +181,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onNavigate, currentView }) => 
 
   // Versión desktop con sidebar contraíble
   return (
-    <>
+    <div className="flex min-h-screen">
       <aside className={`fixed left-0 top-16 h-[calc(100vh-4rem)] bg-dark-200 border-r border-dark-300 transition-all duration-300 ${
         collapsed ? 'w-20' : 'w-64'
       }`}>
@@ -230,18 +231,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ onNavigate, currentView }) => 
         </div>
       </aside>
 
-      {/* Ajuste del margen del contenido principal */}
-      <style>{`
-        main {
-          margin-left: ${collapsed ? '80px' : '256px'};
-          transition: margin-left 0.3s;
-        }
-        @media (max-width: 768px) {
-          main {
-            margin-left: 0;
-          }
-        }
-      `}</style>
-    </>
+      <div className={`pt-16 flex-1 p-6 transition-all duration-300 ${collapsed ? 'pl-20' : 'pl-64'}`}>
+        <div className="max-w-7xl mx-auto">
+          {children}
+        </div>
+      </div>
+    </div>
   );
 };

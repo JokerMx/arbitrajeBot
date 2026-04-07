@@ -16,12 +16,9 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   return (
     <div className="min-h-screen bg-dark-100 text-white">
       <Header />
-      <Sidebar onNavigate={onNavigate} currentView={currentView} />
-      <main className="flex-1 p-6 transition-all duration-300 md:ml-64 lg:ml-64">
-        <div className="max-w-7xl mx-auto">
-          {children}
-        </div>
-      </main>
+      <Sidebar onNavigate={onNavigate} currentView={currentView}>
+        {children}
+      </Sidebar>
     </div>
   );
 };

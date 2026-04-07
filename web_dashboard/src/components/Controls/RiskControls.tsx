@@ -16,6 +16,10 @@ export const RiskControls: React.FC = () => {
 
   if (!localRisk) return null;
 
+  const safeMultiply = (value: number | undefined, factor: number): number => {
+    return (value ?? 0) * factor;
+  };
+
   const handleChange = (field: keyof typeof localRisk, value: number | boolean) => {
     setLocalRisk({ ...localRisk, [field]: value });
     setIsEditing(true);
@@ -63,7 +67,7 @@ export const RiskControls: React.FC = () => {
           />
           <div className="flex justify-between text-xs text-gray-500 mt-1">
             <span>5%</span>
-            <span>{(localRisk.maxPositionSizePct * 100).toFixed(0)}%</span>
+            <span>{safeMultiply(localRisk.maxPositionSizePct, 100).toFixed(0)}%</span>
             <span>30%</span>
           </div>
         </div>
@@ -85,7 +89,7 @@ export const RiskControls: React.FC = () => {
           />
           <div className="flex justify-between text-xs text-gray-500 mt-1">
             <span>5%</span>
-            <span>{(localRisk.maxDailyLossPct * 100).toFixed(0)}%</span>
+            <span>{safeMultiply(localRisk.maxDailyLossPct, 100).toFixed(0)}%</span>
             <span>50%</span>
           </div>
         </div>
@@ -107,7 +111,7 @@ export const RiskControls: React.FC = () => {
           />
           <div className="flex justify-between text-xs text-gray-500 mt-1">
             <span>5%</span>
-            <span>{(localRisk.maxDrawdownPct * 100).toFixed(0)}%</span>
+            <span>{safeMultiply(localRisk.maxDrawdownPct, 100).toFixed(0)}%</span>
             <span>30%</span>
           </div>
         </div>
@@ -129,7 +133,7 @@ export const RiskControls: React.FC = () => {
           />
           <div className="flex justify-between text-xs text-gray-500 mt-1">
             <span>1%</span>
-            <span>{(localRisk.circuitBreakerThreshold * 100).toFixed(0)}%</span>
+            <span>{safeMultiply(localRisk.circuitBreakerThreshold, 100).toFixed(0)}%</span>
             <span>10%</span>
           </div>
         </div>

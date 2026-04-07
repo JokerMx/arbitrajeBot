@@ -59,16 +59,9 @@ impl TradingBot {
         notifier: Arc<TelegramNotifier>,
         risk_manager: Arc<Mutex<RiskManager>>,
         exchange_type: ExchangeType,
+        executor: Arc<OrderExecutor>,
     ) -> anyhow::Result<Self> {
         info!("Inicializando TradingBot en red: {}", config.network);
-        
-        
-        let executor = Arc::new(OrderExecutor::new(
-        &config.private_key,
-        exchange_type,
-        None,
-        None,
-    ).await?);
 
         let mut markets = HashMap::new();
         for market_config in &market_configs {

@@ -116,5 +116,49 @@ pub struct FullConfigDB {
     pub risk: RiskConfigDB,
     pub markets: Vec<MarketConfigDB>,
     pub telegram: TelegramConfigDB,
+    pub leverage: Vec<LeverageConfigDB>,
+    pub protection: ProtectionConfigDB,
     pub updated_at: Option<DateTime<Utc>>,
+}
+
+/// Configuración de apalancamiento por símbolo
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LeverageConfigDB {
+    pub exchange: String,
+    pub symbol: String,
+    pub leverage: i32,
+    pub max_leverage: i32,
+}
+
+impl Default for LeverageConfigDB {
+    fn default() -> Self {
+        Self {
+            exchange: "simulated".to_string(),
+            symbol: "BTC".to_string(),
+            leverage: 1,
+            max_leverage: 10,
+        }
+    }
+}
+
+/// Configuración de protección de capital
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProtectionConfigDB {
+    pub max_capital_at_risk_pct: Decimal,
+    pub auto_stop_loss_enabled: bool,
+    pub auto_stop_loss_pct: Decimal,
+    pub max_leverage: i32,
+    pub emergency_withdraw_enabled: bool,
+}
+
+impl Default for ProtectionConfigDB {
+    fn default() -> Self {
+        Self {
+            max_capital_at_risk_pct: read_env_decimal("MAX_CAPITAL_AT_RISK_PCT", "0.25"),
+            auto_stop_loss_enabled: read_env_or_default("AUTO_STOP_LOSS_ENABLED", true),
+            auto_stop_loss_pct: read_env_decimal("AUTO_STOP_LOSS_PCT", "0.15"),
+            max_leverage: read_env_or_default("MAX_ALLOWABLE_LEVERAGE", 10),
+            emergency_withdraw_enabled: false,
+        }
+    }
 }

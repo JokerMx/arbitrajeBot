@@ -16,6 +16,10 @@ export const MarketControls: React.FC = () => {
 
   if (!localMarkets) return null;
 
+  const safeMultiply = (value: number | undefined, factor: number): number => {
+    return (value ?? 0) * factor;
+  };
+
   const handleToggle = (symbol: string) => {
     const market = localMarkets.find((m) => m.symbol === symbol);
     if (market) {
@@ -97,7 +101,7 @@ export const MarketControls: React.FC = () => {
             {market.enabled && (
               <div>
                 <label className="block text-xs text-gray-400 mb-1">
-                  Asignación de Capital: {(market.marginAlloc * 100).toFixed(0)}%
+                  Asignación de Capital: {safeMultiply(market.marginAlloc, 100).toFixed(0)}%
                 </label>
                 <input
                   type="range"

@@ -84,8 +84,7 @@ impl BybitClient {
     }
 
     fn generate_signature(&self, mut params: HashMap<String, String>, timestamp: i64) -> String {
-        params.insert("api_key".to_string(), self.api_key.clone());
-        params.insert("timestamp".to_string(), timestamp.to_string());
+        let api_key = self.api_key.clone();
         
         let mut sorted_keys: Vec<&String> = params.keys().collect();
         sorted_keys.sort();
@@ -95,7 +94,8 @@ impl BybitClient {
             .collect::<Vec<_>>()
             .join("&");
         
-        let signature = format!("{}{}", query_string, self.api_secret);
+        let signature_payload = format!("{}{}{}", timestamp, api_key, query_string);
+        let signature = format!("{}{}", signature_payload, self.api_secret);
         
         use sha2::{Sha256, Digest};
         let mut hasher = Sha256::new();
@@ -179,24 +179,49 @@ impl BybitClient {
             super::BybitOrderType::Limit => "Limit",
             super::BybitOrderType::Market => "Market",
         }.to_string());
-        params.insert("qty".to_string(), quantity.to_string());
+        
+        let qty_str = quantity.round_dp(8).to_string();
+        params.insert("qty".to_string(), qty_str);
         params.insert("timeInForce".to_string(), "GTC".to_string());
         
         if let Some(p) = price {
-            params.insert("price".to_string(), p.to_string());
+            let price_str = p.round_dp(8).to_string();
+            params.insert("price".to_string(), price_str);
         }
         
         let signature = self.generate_signature(params.clone(), timestamp);
         
-        let mut url = format!("{}{}", self.base_url, endpoint);
-        url.push_str(&format!("?api_key={}&timestamp={}&sign={}", self.api_key, timestamp, signature));
+        let mut param_string = params.iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect::<Vec<_>>()
+            .join("&");
+        param_string.push_str(&format!("&api_key={}&timestamp={}", self.api_key, timestamp));
+        
+        let url = format!(
+            "{}{}?{}&sign={}",
+            self.base_url,
+            endpoint,
+            param_string,
+            signature
+        );
+        
+        info!("📤 Bybit request: POST {}", endpoint);
         
         let response = self.client.post(&url)
-            .json(&params)
+            .header("Content-Type", "application/json")
             .send()
             .await?;
         
-        let data: BybitApiResponse<BybitOrderResult> = response.json().await?;
+        let status = response.status();
+        let body = response.text().await?;
+        
+        info!("📥 Bybit response status: {}, body: {}", status, body);
+        
+        if !status.is_success() {
+            return Err(anyhow!("HTTP error: {} - {}", status, body));
+        }
+        
+        let data: BybitApiResponse<BybitOrderResult> = serde_json::from_str(&body)?;
         
         if data.ret_code != 0 {
             return Err(anyhow!("Bybit order error: {} - {}", data.ret_code, data.ret_msg));

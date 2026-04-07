@@ -137,6 +137,14 @@ async fn main() -> anyhow::Result<()> {
     // =============================================
     let bybit_api_key = env::var("BYBIT_API_KEY").ok();
     let bybit_api_secret = env::var("BYBIT_API_SECRET").ok();
+    let bybit_testnet = env::var("BYBIT_TESTNET")
+        .unwrap_or_else(|_| "false".to_string())
+        .parse::<bool>()
+        .unwrap_or(false);
+    
+    if bybit_testnet {
+        info!("🧪 BYBIT TESTNET ACTIVADO");
+    }
 
     // =============================================
     // CONFIGURACIÓN DEL BOT
@@ -197,15 +205,23 @@ async fn main() -> anyhow::Result<()> {
     // RISK MANAGER
     // =============================================
     info!("📊 Creando RiskManager UNIFICADO...");
-    let risk_manager = Arc::new(Mutex::new(risk::RiskManager::new(
+    let mut risk_manager_instance = risk::RiskManager::new(
         risk_config.clone(),
         initial_capital,
-    )));
+    );
+    
+    risk_manager_instance.set_protection(full_config.protection.clone());
+    
+    for lev in &full_config.leverage {
+        risk_manager_instance.set_leverage(&lev.exchange, &lev.symbol, lev.leverage);
+    }
+    
+    let risk_manager = Arc::new(Mutex::new(risk_manager_instance));
 
     // =============================================
     // EJECUTOR (con API REST + firma)
     // =============================================
-    let executor = Arc::new(executor::OrderExecutor::new(&private_key, exchange_type, bybit_api_key.as_deref(), bybit_api_secret.as_deref()).await?);
+    let executor = Arc::new(executor::OrderExecutor::new(&private_key, exchange_type, bybit_api_key.as_deref(), bybit_api_secret.as_deref(), bybit_testnet).await?);
 
     // Si es mainnet, obtener asset_index de los mercados reales
     if matches!(exchange_type, executor::ExchangeType::HyperliquidMainnet) {
@@ -232,6 +248,7 @@ async fn main() -> anyhow::Result<()> {
         notifier.clone(),
         risk_manager.clone(),
         exchange_type,
+        executor.clone(),
     )
     .await?;
     let bot = Arc::new(Mutex::new(bot));
@@ -271,6 +288,18 @@ async fn main() -> anyhow::Result<()> {
 
     info!("🌐 Iniciando servidor API REST y WebSocket...");
     let config_repo_arc = Arc::new(config_repo);
+    
+    let exchange_type_arc = Arc::new(Mutex::new(exchange_type_str.clone()));
+    let leverage_configs = Arc::new(Mutex::new({
+        let mut map = std::collections::HashMap::new();
+        for lev in &full_config.leverage {
+            let key = format!("{}_{}", lev.exchange, lev.symbol);
+            map.insert(key, lev.leverage);
+        }
+        map
+    }));
+    let protection_arc = Arc::new(Mutex::new(full_config.protection.clone()));
+    
     let api_routes = api_routes(
         bot.clone(),
         risk_manager.clone(),
@@ -281,6 +310,9 @@ async fn main() -> anyhow::Result<()> {
         telegram_bot_option,
         config_repo_arc,
         exchange_type_str.clone(),
+        full_config.protection.clone(),
+        leverage_configs,
+        protection_arc,
     );
 
     let port = 3001;

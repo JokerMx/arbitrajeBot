@@ -22,7 +22,7 @@ pub struct OrderExecutor {
 }
 
 impl OrderExecutor {
-    pub async fn new(private_key: &str, exchange: ExchangeType, api_key: Option<&str>, api_secret: Option<&str>) -> Result<Self> {
+    pub async fn new(private_key: &str, exchange: ExchangeType, api_key: Option<&str>, api_secret: Option<&str>, testnet: bool) -> Result<Self> {
         match exchange {
             ExchangeType::Simulated => {
                 info!("🎮 Usando modo simulado");
@@ -35,11 +35,15 @@ impl OrderExecutor {
                 Ok(Self { exchange, client: Some(client), bybit_client: None })
             }
             ExchangeType::Bybit => {
-                info!("🔵 Conectando a Bybit...");
+                if testnet {
+                    info!("🧪 Conectando a Bybit TESTNET...");
+                } else {
+                    info!("🔵 Conectando a Bybit MAINNET...");
+                }
                 let key = api_key.ok_or_else(|| anyhow!("API Key requerida para Bybit"))?;
                 let secret = api_secret.ok_or_else(|| anyhow!("API Secret requerida para Bybit"))?;
-                let client = BybitClient::new(key, secret, false);
-                info!("✅ Cliente Bybit inicializado");
+                let client = BybitClient::new(key, secret, testnet);
+                info!("✅ Cliente Bybit inicializado (testnet: {})", testnet);
                 Ok(Self { exchange, client: None, bybit_client: Some(client) })
             }
         }

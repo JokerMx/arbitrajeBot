@@ -10,8 +10,11 @@ import { RiskControls } from "./components/Controls/RiskControls";
 import { MarketControls } from "./components/Controls/MarketControls";
 import { SystemSettings } from "./components/Controls/SystemSettings";
 import { TelegramSettings } from "./components/Controls/TelegramSettings";
+import { LeverageControls } from "./components/Controls/LeverageControls";
+import { ProtectionControls } from "./components/Controls/ProtectionControls";
 import { TelegramUsers } from "./components/Admin/TelegramUsers";
 import { useBotStore } from "./store/botStore";
+import { useConfigStore } from "./store/configStore";
 import { wsService } from "./services/websocket";
 import { backendWsUrl } from "./services/backendConfig";
 
@@ -254,9 +257,13 @@ const RiskView: React.FC = () => {
   console.log("📊 Renderizando RiskView");
   return (
     <div className="space-y-6">
-      <h2 className="text-2xl font-bold">Gestión de Riesgo</h2>
-      <div className="bg-dark-200 rounded-xl p-6 border border-dark-300">
+      <h2 className="text-2xl font-bold">Gestión de Riesgo y Protección</h2>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <RiskControls />
+        <ProtectionControls />
+        <div className="bg-dark-200 rounded-xl p-6 border border-dark-300 lg:col-span-2">
+          <LeverageControls />
+        </div>
       </div>
     </div>
   );
@@ -330,12 +337,10 @@ const SettingsView: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <SystemSettings />
         <TelegramSettings />
-        <div className="bg-dark-200 rounded-xl p-6 border border-dark-300">
-          <StrategyControls />
-        </div>
-        <div className="bg-dark-200 rounded-xl p-6 border border-dark-300">
-          <RiskControls />
-        </div>
+        <StrategyControls />
+        <RiskControls />
+        <LeverageControls />
+        <ProtectionControls />
         <div className="bg-dark-200 rounded-xl p-6 border border-dark-300 lg:col-span-2">
           <MarketControls />
         </div>
@@ -350,10 +355,12 @@ const SettingsView: React.FC = () => {
 
 function App() {
   const { status } = useBotStore();
+  const { loadConfig } = useConfigStore();
   const [fills, setFills] = useState<FillData[]>([]);
   const [currentView, setCurrentView] = useState<string>("dashboard");
 
   useEffect(() => {
+    loadConfig();
   console.log("🔌 Iniciando conexión WebSocket...");
   wsService.connect();  // Ya no necesita URL
 

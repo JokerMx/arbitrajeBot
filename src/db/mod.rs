@@ -104,6 +104,46 @@ impl Database {
         .execute(&self.pool)
         .await?;
         
+        // Tabla de apalancamiento por símbolo
+        let leverage_table = self.config.table_name("leverage");
+        sqlx::query(&format!(r#"
+            CREATE TABLE IF NOT EXISTS `{}` (
+                id INT PRIMARY KEY AUTO_INCREMENT,
+                exchange VARCHAR(50) NOT NULL,
+                symbol VARCHAR(20) NOT NULL,
+                leverage INT NOT NULL DEFAULT 1,
+                max_leverage INT NOT NULL DEFAULT 10,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY unique_exchange_symbol (exchange, symbol)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        "#, leverage_table))
+        .execute(&self.pool)
+        .await?;
+        
+        // Tabla de protección de capital
+        let protection_table = self.config.table_name("protection");
+        sqlx::query(&format!(r#"
+            CREATE TABLE IF NOT EXISTS `{}` (
+                id INT PRIMARY KEY AUTO_INCREMENT,
+                max_capital_at_risk_pct DECIMAL(5,4) NOT NULL DEFAULT 0.25,
+                auto_stop_loss_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                auto_stop_loss_pct DECIMAL(5,4) NOT NULL DEFAULT 0.15,
+                max_leverage INT NOT NULL DEFAULT 10,
+                emergency_withdraw_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        "#, protection_table))
+        .execute(&self.pool)
+        .await?;
+        
+        // Insertar config de protección por defecto si no existe
+        sqlx::query(&format!(r#"
+            INSERT IGNORE INTO `{}` (id, max_capital_at_risk_pct, auto_stop_loss_enabled, auto_stop_loss_pct, max_leverage)
+            VALUES (1, 0.25, TRUE, 0.15, 10)
+        "#, protection_table))
+        .execute(&self.pool)
+        .await?;
+        
         info!("✅ Tablas inicializadas en MariaDB");
         
         Ok(())

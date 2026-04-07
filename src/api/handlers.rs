@@ -11,6 +11,7 @@ use crate::types::{StrategyConfig, RiskConfig, MarketConfig};
 use crate::notifier::TelegramNotifier;
 use crate::telegram_bot::TelegramBot;
 use crate::db::ConfigRepository;
+use crate::db::models::ProtectionConfigDB;
 use tracing::info;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
@@ -32,6 +33,8 @@ pub struct ApiState {
     pub config_repo: Option<Arc<ConfigRepository>>,
     pub bot_start_time: std::time::Instant,
     pub exchange_type: Arc<Mutex<String>>,
+    pub leverage_configs: Arc<Mutex<std::collections::HashMap<String, i32>>>,
+    pub protection_config: Arc<Mutex<crate::db::models::ProtectionConfigDB>>,
 }
 
 // =============================================
@@ -116,6 +119,22 @@ pub async fn get_config(state: ApiState) -> Result<impl Reply, Rejection> {
     let risk = state.risk_config.lock().await;
     let markets = state.market_configs.lock().await;
     let risk_mgr = state.risk_manager.lock().await;
+    let leverage_configs = state.leverage_configs.lock().await;
+    let protection = state.protection_config.lock().await;
+    
+    let leverage: Vec<LeverageResponse> = leverage_configs.iter()
+        .map(|(k, v)| {
+            let parts: Vec<&str> = k.split('_').collect();
+            let exchange = parts.get(0).unwrap_or(&"simulated");
+            let symbol = parts.get(1).unwrap_or(&"BTC");
+            LeverageResponse {
+                exchange: exchange.to_string(),
+                symbol: symbol.to_string(),
+                leverage: *v,
+                max_leverage: protection.max_leverage,
+            }
+        })
+        .collect();
     
     let response = FullConfigResponse {
         strategy: StrategyConfigResponse {
@@ -149,6 +168,14 @@ pub async fn get_config(state: ApiState) -> Result<impl Reply, Rejection> {
             notify_status: true,
         },
         initial_capital: risk_mgr.initial_capital().to_f64().unwrap_or(10.0),
+        leverage,
+        protection: ProtectionResponse {
+            max_capital_at_risk_pct: protection.max_capital_at_risk_pct.to_f64().unwrap_or(0.25),
+            auto_stop_loss_enabled: protection.auto_stop_loss_enabled,
+            auto_stop_loss_pct: protection.auto_stop_loss_pct.to_f64().unwrap_or(0.15),
+            max_leverage: protection.max_leverage,
+            emergency_withdraw_enabled: protection.emergency_withdraw_enabled,
+        },
     };
     
     Ok(json(&response))
@@ -206,6 +233,62 @@ pub async fn update_config(
                     ).await;
                 }
                 info!("✅ Mercados actualizados en BD");
+            });
+        }
+    }
+    
+    // Actualizar apalancamiento
+    if let Some(leverage_updates) = update.leverage {
+        let mut lev_configs = state.leverage_configs.lock().await;
+        let mut risk_mgr = state.risk_manager.lock().await;
+        for lev in &leverage_updates {
+            let key = format!("{}_{}", lev.exchange, lev.symbol);
+            lev_configs.insert(key.clone(), lev.leverage);
+            risk_mgr.set_leverage(&lev.exchange, &lev.symbol, lev.leverage);
+        }
+        
+        if let Some(repo) = &state.config_repo {
+            let repo_clone = repo.clone();
+            let levs = leverage_updates.clone();
+            tokio::spawn(async move {
+                for lev in levs {
+                    let _ = repo_clone.update_leverage(&lev.exchange, &lev.symbol, lev.leverage, 10).await;
+                }
+            });
+        }
+    }
+    
+    // Actualizar protección
+    if let Some(prot_update) = update.protection {
+        let prot_clone = {
+            let mut prot = state.protection_config.lock().await;
+            if let Some(v) = prot_update.max_capital_at_risk_pct {
+                prot.max_capital_at_risk_pct = Decimal::from_f64(v).unwrap_or(Decimal::new(25, 2));
+            }
+            if let Some(v) = prot_update.auto_stop_loss_enabled {
+                prot.auto_stop_loss_enabled = v;
+            }
+            if let Some(v) = prot_update.auto_stop_loss_pct {
+                prot.auto_stop_loss_pct = Decimal::from_f64(v).unwrap_or(Decimal::new(15, 2));
+            }
+            if let Some(v) = prot_update.max_leverage {
+                prot.max_leverage = v;
+            }
+            if let Some(v) = prot_update.emergency_withdraw_enabled {
+                prot.emergency_withdraw_enabled = v;
+            }
+            
+            let mut risk_mgr = state.risk_manager.lock().await;
+            risk_mgr.set_protection(prot.clone());
+            
+            prot.clone()
+        };
+        
+        if let Some(repo) = &state.config_repo {
+            let repo_clone = repo.clone();
+            let prot_to_save = prot_clone;
+            tokio::spawn(async move {
+                let _ = repo_clone.update_protection_config(&prot_to_save).await;
             });
         }
     }
