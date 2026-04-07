@@ -31,6 +31,7 @@ pub struct ApiState {
     pub telegram_bot: Option<Arc<TelegramBot>>,
     pub config_repo: Option<Arc<ConfigRepository>>,
     pub bot_start_time: std::time::Instant,
+    pub exchange_type: Arc<Mutex<String>>,
 }
 
 // =============================================
@@ -240,6 +241,34 @@ pub async fn restart_bot(state: ApiState) -> Result<impl Reply, Rejection> {
     Ok(json(&serde_json::json!({
         "status": "success",
         "message": "Bot reiniciado"
+    })))
+}
+
+#[derive(serde::Deserialize)]
+pub struct UpdateExchangeRequest {
+    pub exchange_type: Option<String>,
+    pub network: Option<String>,
+    pub log_level: Option<String>,
+}
+
+pub async fn update_exchange(
+    update: UpdateExchangeRequest,
+    state: ApiState,
+) -> Result<impl Reply, Rejection> {
+    if let Some(exchange_type) = update.exchange_type {
+        let mut current = state.exchange_type.lock().await;
+        if *current != exchange_type {
+            info!("🔄 Cambiando exchange: {} -> {}", current, exchange_type);
+            *current = exchange_type.clone();
+            
+            let mut bot = state.bot.lock().await;
+            bot.notify_exchange_change(&exchange_type).await;
+        }
+    }
+    
+    Ok(json(&serde_json::json!({
+        "status": "success",
+        "message": "Exchange actualizado. El cambio se aplicará en ~10 segundos."
     })))
 }
 

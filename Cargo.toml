@@ -33,6 +33,10 @@ sqlx = { version = "0.7", features = ["runtime-tokio-native-tls", "mysql", "chro
 hypersdk = "0.2"
 either = "1.13"
 
+# Bybit API
+hmac = "0.12"
+sha2 = "0.10"
+
 [profile.release]
 lto = true
 codegen-units = 1

@@ -25,7 +25,10 @@ pub fn api_routes(
     notifier: Arc<TelegramNotifier>,
     telegram_bot: Option<Arc<TelegramBot>>,
     config_repo: Arc<ConfigRepository>,
+    exchange_type: String,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    
+    let exchange_type_arc = Arc::new(Mutex::new(exchange_type));
     
     let state = handlers::ApiState {
         bot,
@@ -37,6 +40,7 @@ pub fn api_routes(
         telegram_bot,
         config_repo: Some(config_repo),
         bot_start_time: std::time::Instant::now(),
+        exchange_type: exchange_type_arc,
     };
     
     let state_filter = warp::any().map(move || state.clone());
@@ -83,6 +87,16 @@ pub fn api_routes(
         .and(warp::post())
         .and(state_filter.clone())
         .and_then(handlers::restart_bot);
+    
+    // =============================================
+    // RUTAS DE EXCHANGE
+    // =============================================
+    
+    let update_exchange = warp::path!("api" / "exchange")
+        .and(warp::post())
+        .and(warp::body::json())
+        .and(state_filter.clone())
+        .and_then(handlers::update_exchange);
     
     // =============================================
     // RUTAS DE TELEGRAM
@@ -185,6 +199,7 @@ pub fn api_routes(
         .or(start)
         .or(stop)
         .or(restart)
+        .or(update_exchange)
         .or(telegram_users)
         .or(telegram_stats)
         .or(telegram_authorize)

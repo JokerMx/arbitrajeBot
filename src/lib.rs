@@ -9,3 +9,4 @@ pub mod api;
 pub mod telegram_bot;
 pub mod db;
 pub mod hyperliquid;
+pub mod bybit;

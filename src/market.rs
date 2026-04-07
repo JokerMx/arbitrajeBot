@@ -43,6 +43,7 @@ pub struct MarketManager {
     _position: Option<Position>,
     _price_history: Vec<Decimal>,
     is_mainnet: bool,
+    is_bybit: bool,
 }
 
 impl MarketManager {
@@ -53,6 +54,7 @@ impl MarketManager {
         executor: Arc<OrderExecutor>,
         notifier: Arc<TelegramNotifier>,
         is_mainnet: bool,
+        is_bybit: bool,
     ) -> Self {
         let initial_price = match config.symbol.as_str() {
             "BTC" => 50000.0,
@@ -78,7 +80,24 @@ impl MarketManager {
             _position: None,
             _price_history: Vec::with_capacity(100),
             is_mainnet,
+            is_bybit,
             enabled: config.enabled,
+        }
+    }
+
+    pub fn set_exchange(&mut self, exchange: &str) {
+        let was_mainnet = self.is_mainnet;
+        let was_bybit = self.is_bybit;
+        
+        self.is_mainnet = exchange == "hyperliquid_mainnet";
+        self.is_bybit = exchange == "bybit";
+        
+        if self.is_mainnet && !was_mainnet {
+            info!("🔄 Mercado {} conectado a Hyperliquid Mainnet", self.symbol);
+        } else if self.is_bybit && !was_bybit {
+            info!("🔄 Mercado {} conectado a Bybit", self.symbol);
+        } else if !self.is_mainnet && !self.is_bybit && (was_mainnet || was_bybit) {
+            info!("🔄 Mercado {} cambiado a modo simulado", self.symbol);
         }
     }
 

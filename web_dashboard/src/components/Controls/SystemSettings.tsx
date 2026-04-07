@@ -1,27 +1,50 @@
 import React from "react";
 import { useConfigStore } from "../../store/configStore";
-import { Save, RotateCcw, Settings } from "lucide-react";
+import { backendApiBaseUrl } from "../../services/backendConfig";
+import { Save, RotateCcw, Settings, Loader } from "lucide-react";
 import toast from "react-hot-toast";
 
 export const SystemSettings: React.FC = () => {
   const { config } = useConfigStore();
-  const [exchangeType, setExchangeType] = React.useState<string>(
-    localStorage.getItem("exchange_type") || "simulated"
-  );
-  const [network, setNetwork] = React.useState<string>(
-    localStorage.getItem("network") || "mainnet"
-  );
-  const [logLevel, setLogLevel] = React.useState<string>(
-    localStorage.getItem("log_level") || "info"
-  );
+  const [exchangeType, setExchangeType] = React.useState<string>("simulated");
+  const [network, setNetwork] = React.useState<string>("mainnet");
+  const [logLevel, setLogLevel] = React.useState<string>("info");
   const [isEditing, setIsEditing] = React.useState(false);
+  const [isSaving, setIsSaving] = React.useState(false);
 
-  const handleSave = () => {
-    localStorage.setItem("exchange_type", exchangeType);
-    localStorage.setItem("network", network);
-    localStorage.setItem("log_level", logLevel);
-    setIsEditing(false);
-    toast.success("Configuración del sistema actualizada");
+  React.useEffect(() => {
+    const saved = localStorage.getItem("exchange_type") || "simulated";
+    setExchangeType(saved);
+    setNetwork(localStorage.getItem("network") || "mainnet");
+    setLogLevel(localStorage.getItem("log_level") || "info");
+  }, []);
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      const response = await fetch(`${backendApiBaseUrl}/exchange`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          exchange_type: exchangeType,
+          network: network,
+          log_level: logLevel,
+        }),
+      });
+      
+      if (response.ok) {
+        localStorage.setItem("exchange_type", exchangeType);
+        localStorage.setItem("network", network);
+        localStorage.setItem("log_level", logLevel);
+        setIsEditing(false);
+        toast.success("Cambios aplicados. El bot cambiará de exchange en ~10 segundos.");
+      } else {
+        toast.error("Error al guardar configuración");
+      }
+    } catch (error) {
+      toast.error("Error de conexión");
+    }
+    setIsSaving(false);
   };
 
   const handleReset = () => {
@@ -29,6 +52,17 @@ export const SystemSettings: React.FC = () => {
     setNetwork("mainnet");
     setLogLevel("info");
     setIsEditing(false);
+  };
+
+  const getExchangeWarning = () => {
+    switch (exchangeType) {
+      case "hyperliquid_mainnet":
+        return "⚠️ Operando en Hyperliquid MAINNET con dinero REAL";
+      case "bybit":
+        return "⚠️ Operando en Bybit con dinero REAL";
+      default:
+        return "Modo paper trading - Sin riesgo";
+    }
   };
 
   return (
@@ -53,11 +87,10 @@ export const SystemSettings: React.FC = () => {
           >
             <option value="simulated">Simulado</option>
             <option value="hyperliquid_mainnet">Hyperliquid Mainnet</option>
+            <option value="bybit">Bybit</option>
           </select>
-          <p className="text-xs text-gray-500 mt-1">
-            {exchangeType === "simulated"
-              ? "Modo paper trading - Sin riesgo"
-              : "⚠️ Operando con dinero real"}
+          <p className={`text-xs mt-1 ${exchangeType !== "simulated" ? "text-warning" : "text-gray-500"}`}>
+            {getExchangeWarning()}
           </p>
         </div>
 
@@ -102,10 +135,11 @@ export const SystemSettings: React.FC = () => {
           <div className="flex gap-2 pt-4 border-t border-dark-300">
             <button
               onClick={handleSave}
-              className="flex-1 flex items-center justify-center gap-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg px-4 py-2 text-sm transition-colors"
+              disabled={isSaving}
+              className="flex-1 flex items-center justify-center gap-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg px-4 py-2 text-sm transition-colors disabled:opacity-50"
             >
-              <Save className="w-4 h-4" />
-              Guardar Cambios
+              {isSaving ? <Loader className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              {isSaving ? "Aplicando..." : "Aplicar Cambios"}
             </button>
             <button
               onClick={handleReset}

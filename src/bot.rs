@@ -63,10 +63,12 @@ impl TradingBot {
         info!("Inicializando TradingBot en red: {}", config.network);
         
         
-    let executor = Arc::new(OrderExecutor::new(
-    &config.private_key,
-    exchange_type,  // ExchangeType se pasa desde main
-).await?);
+        let executor = Arc::new(OrderExecutor::new(
+        &config.private_key,
+        exchange_type,
+        None,
+        None,
+    ).await?);
 
         let mut markets = HashMap::new();
         for market_config in &market_configs {
@@ -78,6 +80,7 @@ impl TradingBot {
             
             let strategy = AvellanedaStoikov::new(strategy_config.clone());
             let is_mainnet = matches!(exchange_type, ExchangeType::HyperliquidMainnet);
+            let is_bybit = matches!(exchange_type, ExchangeType::Bybit);
             let market = MarketManager::new(
                 market_config.clone(),
                 strategy,
@@ -85,6 +88,7 @@ impl TradingBot {
                 executor.clone(),
                 notifier.clone(),
                 is_mainnet,
+                is_bybit,
             );
             
             markets.insert(market_config.symbol.clone(), market);
@@ -135,6 +139,13 @@ impl TradingBot {
             if enabled {
                 market.update_market_data().await;
             }
+        }
+    }
+
+    pub async fn notify_exchange_change(&mut self, new_exchange: &str) {
+        info!("🔄 Notificando cambio de exchange a los mercados: {}", new_exchange);
+        for market in self.markets.values_mut() {
+            market.set_exchange(new_exchange);
         }
     }
 

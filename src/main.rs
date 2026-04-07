@@ -21,6 +21,7 @@ mod api;
 mod telegram_bot;
 mod db;
 mod hyperliquid;
+mod bybit;
 
 use crate::bot::{TradingBot, BotConfig};
 use crate::types::{MarketConfig, StrategyConfig, RiskConfig};
@@ -121,14 +122,21 @@ async fn main() -> anyhow::Result<()> {
     let telegram_notify_status = full_config.telegram.notify_status;
 
     // =============================================
-    // TIPO DE EXCHANGE (MAINNET o SIMULADO)
+    // TIPO DE EXCHANGE (MAINNET, BYBIT o SIMULADO)
     // =============================================
     let exchange_type_str = env::var("EXCHANGE_TYPE").unwrap_or_else(|_| "simulated".to_string());
     let exchange_type = match exchange_type_str.as_str() {
         "hyperliquid_mainnet" => ExchangeType::HyperliquidMainnet,
+        "bybit" => ExchangeType::Bybit,
         _ => ExchangeType::Simulated,
     };
     info!("🔄 Modo de exchange: {}", exchange_type_str);
+
+    // =============================================
+    // CREDENCIALES DE BYBIT
+    // =============================================
+    let bybit_api_key = env::var("BYBIT_API_KEY").ok();
+    let bybit_api_secret = env::var("BYBIT_API_SECRET").ok();
 
     // =============================================
     // CONFIGURACIÓN DEL BOT
@@ -197,7 +205,7 @@ async fn main() -> anyhow::Result<()> {
     // =============================================
     // EJECUTOR (con API REST + firma)
     // =============================================
-    let executor = Arc::new(executor::OrderExecutor::new(&private_key, exchange_type).await?);
+    let executor = Arc::new(executor::OrderExecutor::new(&private_key, exchange_type, bybit_api_key.as_deref(), bybit_api_secret.as_deref()).await?);
 
     // Si es mainnet, obtener asset_index de los mercados reales
     if matches!(exchange_type, executor::ExchangeType::HyperliquidMainnet) {
@@ -272,6 +280,7 @@ async fn main() -> anyhow::Result<()> {
         notifier.clone(),
         telegram_bot_option,
         config_repo_arc,
+        exchange_type_str.clone(),
     );
 
     let port = 3001;

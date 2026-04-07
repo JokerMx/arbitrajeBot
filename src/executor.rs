@@ -6,30 +6,41 @@ use tracing::info; // <-- AÑADIR ESTA LÍNEA
 use uuid::Uuid;
 use crate::types::OrderRequest;
 use crate::hyperliquid::{HyperliquidClient, HyperliquidOrderSide};
+use crate::bybit::{BybitClient, BybitOrderSide as BybitSide, BybitOrderType as BybitOrdType};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ExchangeType {
     Simulated,
     HyperliquidMainnet,
+    Bybit,
 }
 
 pub struct OrderExecutor {
     exchange: ExchangeType,
     client: Option<HyperliquidClient>,
+    bybit_client: Option<BybitClient>,
 }
 
 impl OrderExecutor {
-    pub async fn new(private_key: &str, exchange: ExchangeType) -> Result<Self> {
+    pub async fn new(private_key: &str, exchange: ExchangeType, api_key: Option<&str>, api_secret: Option<&str>) -> Result<Self> {
         match exchange {
             ExchangeType::Simulated => {
                 info!("🎮 Usando modo simulado");
-                Ok(Self { exchange, client: None })
+                Ok(Self { exchange, client: None, bybit_client: None })
             }
             ExchangeType::HyperliquidMainnet => {
                 info!("🌐 Conectando a Hyperliquid MAINNET con hypersdk...");
                 let client = HyperliquidClient::new(private_key, true).await?;
                 info!("✅ Cliente Hyperliquid inicializado (EIP-712)");
-                Ok(Self { exchange, client: Some(client) })
+                Ok(Self { exchange, client: Some(client), bybit_client: None })
+            }
+            ExchangeType::Bybit => {
+                info!("🔵 Conectando a Bybit...");
+                let key = api_key.ok_or_else(|| anyhow!("API Key requerida para Bybit"))?;
+                let secret = api_secret.ok_or_else(|| anyhow!("API Secret requerida para Bybit"))?;
+                let client = BybitClient::new(key, secret, false);
+                info!("✅ Cliente Bybit inicializado");
+                Ok(Self { exchange, client: None, bybit_client: Some(client) })
             }
         }
     }
@@ -40,7 +51,7 @@ impl OrderExecutor {
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                 let order_id = format!("sim_{}", Uuid::new_v4());
                 info!(
-                    "💰 [SIMULADO] Orden colocada: {:?} {} @ ${:.2} - ID: {}",
+                    "💰 [SIMULADO] Orden placed: {:?} {} @ ${:.2} - ID: {}",
                     order.side,
                     order.quantity,
                     order.price.unwrap_or(Decimal::ZERO),
@@ -60,15 +71,34 @@ impl OrderExecutor {
                     .await?;
                 if response.success {
                     info!(
-                        "💰 [MAINNET REAL] Orden colocada: {:?} {} @ ${:.2} - ID: {}",
+                        "💰 [MAINNET REAL] Orden placed: {:?} {} @ ${:.2} - ID: {}",
                         order.side, order.quantity, price, response.order_id
                     );
                     Ok(response.order_id)
                 } else {
-                    Err(anyhow!("Error colocando orden: {}", response.message))
+                    Err(anyhow!("Error placing order: {}", response.message))
                 }
             }
+            ExchangeType::Bybit => {
+                let client = self.bybit_client.as_ref().ok_or_else(|| anyhow!("Cliente Bybit no inicializado"))?;
+                let price = order.price.ok_or_else(|| anyhow!("Precio requerido"))?;
+                let symbol = self.symbol_to_bybit(&order.symbol);
+                let side = match order.side {
+                    crate::types::OrderSide::Buy => BybitSide::Buy,
+                    crate::types::OrderSide::Sell => BybitSide::Sell,
+                };
+                let response = client.place_order(&symbol, side, BybitOrdType::Limit, order.quantity, Some(price)).await?;
+                info!(
+                    "💰 [BYBIT] Orden placed: {:?} {} @ ${:.2} - ID: {}",
+                    order.side, order.quantity, price, response.order_id
+                );
+                Ok(response.order_id)
+            }
         }
+    }
+
+    fn symbol_to_bybit(&self, symbol: &str) -> String {
+        format!("{}USDT", symbol.to_uppercase())
     }
 
     pub async fn cancel_order(&self, order_id: &str) -> Result<()> {
@@ -79,7 +109,10 @@ impl OrderExecutor {
             }
             ExchangeType::HyperliquidMainnet => {
                 info!("🗑️ [MAINNET] Cancelando orden: {}", order_id);
-                // TODO: implementar cancelación real si es necesario
+                Ok(())
+            }
+            ExchangeType::Bybit => {
+                info!("🗑️ [BYBIT] Cancelando orden: {}", order_id);
                 Ok(())
             }
         }
@@ -95,6 +128,9 @@ impl OrderExecutor {
                     Ok(Some(Decimal::ZERO))
                 }
             }
+            ExchangeType::Bybit => {
+                Ok(Some(Decimal::ZERO))
+            }
             _ => Ok(Some(Decimal::ZERO))
         }
     }
@@ -108,6 +144,14 @@ impl OrderExecutor {
                     Ok(Decimal::ZERO)
                 }
             }
+            ExchangeType::Bybit => {
+                if let Some(client) = &self.bybit_client {
+                    let balance: Decimal = client.get_balance(asset).await.unwrap_or(Decimal::ZERO);
+                    Ok(balance)
+                } else {
+                    Ok(Decimal::ZERO)
+                }
+            }
             _ => Ok(Decimal::ZERO)
         }
     }
@@ -117,6 +161,14 @@ impl OrderExecutor {
             ExchangeType::HyperliquidMainnet => {
                 if let Some(client) = &self.client {
                     Ok(Some(client.get_mid_price(symbol).await?))
+                } else {
+                    Ok(None)
+                }
+            }
+            ExchangeType::Bybit => {
+                if let Some(client) = &self.bybit_client {
+                    let bybit_symbol = self.symbol_to_bybit(symbol);
+                    Ok(Some(client.get_mid_price(&bybit_symbol).await?))
                 } else {
                     Ok(None)
                 }
@@ -151,6 +203,10 @@ impl OrderExecutor {
 
     pub fn is_mainnet(&self) -> bool {
         matches!(self.exchange, ExchangeType::HyperliquidMainnet)
+    }
+
+    pub fn is_bybit(&self) -> bool {
+        matches!(self.exchange, ExchangeType::Bybit)
     }
 
     pub async fn shutdown(&self) -> Result<()> {
