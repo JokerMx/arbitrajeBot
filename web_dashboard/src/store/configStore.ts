@@ -11,27 +11,27 @@ import { backendApiBaseUrl } from "../services/backendConfig";
 
 const DEFAULT_CONFIG: FullConfig = {
   strategy: {
-    baseSpreadTicks: 8,
-    riskAversion: 0.25,
-    marketImpact: 0.02,
-    inventorySkewStrength: 0.2,
+    baseSpreadTicks: 10,
+    riskAversion: 0.15,
+    marketImpact: 0.01,
+    inventorySkewStrength: 0.15,
     volatilityLookbackMinutes: 20,
     orderRefreshMs: 30000,
-    maxInventoryRatio: 0.15,
+    maxInventoryRatio: 0.10,
   },
   risk: {
-    maxPositionSizeUsd: 1.5,
-    maxDailyLossUsd: 3.0,
-    maxDrawdownPct: 0.2,
+    maxPositionSizePct: 0.10,
+    maxDailyLossPct: 0.20,
+    maxDrawdownPct: 0.15,
     killSwitchEnabled: true,
-    circuitBreakerThreshold: 0.05,
+    circuitBreakerThreshold: 0.03,
   },
   markets: [
-    { symbol: "BTC", enabled: true, marginAlloc: 0.12, minSize: 0.00001 },
-    { symbol: "ETH", enabled: true, marginAlloc: 0.12, minSize: 0.0001 },
-    { symbol: "BNB", enabled: true, marginAlloc: 0.12, minSize: 0.001 },
-    { symbol: "SOL", enabled: true, marginAlloc: 0.12, minSize: 0.01 },
-    { symbol: "XRP", enabled: true, marginAlloc: 0.12, minSize: 0.5 },
+    { symbol: "BTC", enabled: true, marginAlloc: 0.10, minSize: 0.00001 },
+    { symbol: "ETH", enabled: false, marginAlloc: 0.10, minSize: 0.0001 },
+    { symbol: "BNB", enabled: false, marginAlloc: 0.10, minSize: 0.001 },
+    { symbol: "SOL", enabled: false, marginAlloc: 0.10, minSize: 0.01 },
+    { symbol: "XRP", enabled: false, marginAlloc: 0.10, minSize: 0.5 },
   ],
   telegram: {
     enabled: false,
@@ -41,7 +41,7 @@ const DEFAULT_CONFIG: FullConfig = {
     notifyFills: true,
     notifyStatus: true,
   },
-  initialCapital: 10,
+  initialCapital: 50,
 };
 
 interface ConfigStore {

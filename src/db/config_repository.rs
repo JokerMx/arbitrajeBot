@@ -311,44 +311,65 @@ impl ConfigRepository {
     
     /// Crear mercados por defecto
     async fn create_default_markets(&self) -> Result<Vec<MarketConfigDB>> {
+        let btc_enabled = std::env::var("MARKETS_ENABLED_BTC")
+            .unwrap_or_else(|_| "true".to_string())
+            .parse()
+            .unwrap_or(true);
+        let eth_enabled = std::env::var("MARKETS_ENABLED_ETH")
+            .unwrap_or_else(|_| "false".to_string())
+            .parse()
+            .unwrap_or(false);
+        let bnb_enabled = std::env::var("MARKETS_ENABLED_BNB")
+            .unwrap_or_else(|_| "false".to_string())
+            .parse()
+            .unwrap_or(false);
+        let sol_enabled = std::env::var("MARKETS_ENABLED_SOL")
+            .unwrap_or_else(|_| "false".to_string())
+            .parse()
+            .unwrap_or(false);
+        let xrp_enabled = std::env::var("MARKETS_ENABLED_XRP")
+            .unwrap_or_else(|_| "false".to_string())
+            .parse()
+            .unwrap_or(false);
+
         let default_markets = vec![
             MarketConfigDB { 
                 symbol: "BTC".to_string(), 
-                enabled: true, 
-                margin_alloc: Decimal::new(12, 2),      // 0.12
-                min_size: Decimal::new(1, 5),           // 0.00001
+                enabled: btc_enabled, 
+                margin_alloc: Decimal::from_str(&std::env::var("MARKETS_MARGIN_ALLOC_BTC").unwrap_or_else(|_| "0.10".to_string())).unwrap_or(Decimal::new(10, 2)),
+                min_size: Decimal::from_str(&std::env::var("MARKETS_MIN_SIZE_BTC").unwrap_or_else(|_| "0.00001".to_string())).unwrap_or(Decimal::new(1, 5)),
                 price_decimals: 1, 
                 size_decimals: 8 
             },
             MarketConfigDB { 
                 symbol: "ETH".to_string(), 
-                enabled: true, 
-                margin_alloc: Decimal::new(12, 2),      // 0.12
-                min_size: Decimal::new(1, 4),           // 0.0001
+                enabled: eth_enabled, 
+                margin_alloc: Decimal::from_str(&std::env::var("MARKETS_MARGIN_ALLOC_ETH").unwrap_or_else(|_| "0.10".to_string())).unwrap_or(Decimal::new(10, 2)),
+                min_size: Decimal::from_str(&std::env::var("MARKETS_MIN_SIZE_ETH").unwrap_or_else(|_| "0.0001".to_string())).unwrap_or(Decimal::new(1, 4)),
                 price_decimals: 1, 
                 size_decimals: 6 
             },
             MarketConfigDB { 
                 symbol: "BNB".to_string(), 
-                enabled: true, 
-                margin_alloc: Decimal::new(12, 2),      // 0.12
-                min_size: Decimal::new(1, 3),           // 0.001
+                enabled: bnb_enabled, 
+                margin_alloc: Decimal::from_str(&std::env::var("MARKETS_MARGIN_ALLOC_BNB").unwrap_or_else(|_| "0.10".to_string())).unwrap_or(Decimal::new(10, 2)),
+                min_size: Decimal::from_str(&std::env::var("MARKETS_MIN_SIZE_BNB").unwrap_or_else(|_| "0.001".to_string())).unwrap_or(Decimal::new(1, 3)),
                 price_decimals: 2, 
                 size_decimals: 5 
             },
             MarketConfigDB { 
                 symbol: "SOL".to_string(), 
-                enabled: true, 
-                margin_alloc: Decimal::new(12, 2),      // 0.12
-                min_size: Decimal::new(1, 2),           // 0.01
+                enabled: sol_enabled, 
+                margin_alloc: Decimal::from_str(&std::env::var("MARKETS_MARGIN_ALLOC_SOL").unwrap_or_else(|_| "0.10".to_string())).unwrap_or(Decimal::new(10, 2)),
+                min_size: Decimal::from_str(&std::env::var("MARKETS_MIN_SIZE_SOL").unwrap_or_else(|_| "0.01".to_string())).unwrap_or(Decimal::new(1, 2)),
                 price_decimals: 2, 
                 size_decimals: 4 
             },
             MarketConfigDB { 
                 symbol: "XRP".to_string(), 
-                enabled: true, 
-                margin_alloc: Decimal::new(12, 2),      // 0.12
-                min_size: Decimal::new(5, 1),           // 0.5
+                enabled: xrp_enabled, 
+                margin_alloc: Decimal::from_str(&std::env::var("MARKETS_MARGIN_ALLOC_XRP").unwrap_or_else(|_| "0.10".to_string())).unwrap_or(Decimal::new(10, 2)),
+                min_size: Decimal::from_str(&std::env::var("MARKETS_MIN_SIZE_XRP").unwrap_or_else(|_| "0.5".to_string())).unwrap_or(Decimal::new(5, 1)),
                 price_decimals: 4, 
                 size_decimals: 2 
             },

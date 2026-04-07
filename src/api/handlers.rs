@@ -11,6 +11,9 @@ use crate::types::{StrategyConfig, RiskConfig, MarketConfig};
 use crate::notifier::TelegramNotifier;
 use crate::telegram_bot::TelegramBot;
 use crate::db::ConfigRepository;
+use tracing::info;
+use rust_decimal::Decimal;
+use rust_decimal::prelude::FromPrimitive;
 use super::models::*;
 
 // =============================================
@@ -186,6 +189,23 @@ pub async fn update_config(
                 if let Some(v) = update.margin_alloc { market.margin_alloc = v; }
                 if let Some(v) = update.min_size { market.min_size = v; }
             }
+        }
+        
+        // Guardar en base de datos
+        if let Some(repo) = &state.config_repo {
+            let markets_list: Vec<MarketConfig> = markets.clone();
+            let repo_clone = repo.clone();
+            tokio::spawn(async move {
+                for market in &markets_list {
+                    let _ = repo_clone.update_market(
+                        &market.symbol,
+                        Some(market.enabled),
+                        Some(Decimal::from_f64(market.margin_alloc).unwrap_or_default()),
+                        Some(Decimal::from_f64(market.min_size).unwrap_or_default()),
+                    ).await;
+                }
+                info!("✅ Mercados actualizados en BD");
+            });
         }
     }
     

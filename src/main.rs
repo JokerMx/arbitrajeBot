@@ -260,6 +260,7 @@ async fn main() -> anyhow::Result<()> {
     let market_configs_arc = Arc::new(Mutex::new(market_configs));
 
     info!("🌐 Iniciando servidor API REST y WebSocket...");
+    let config_repo_arc = Arc::new(config_repo);
     let api_routes = api_routes(
         bot.clone(),
         risk_manager.clone(),
@@ -268,6 +269,7 @@ async fn main() -> anyhow::Result<()> {
         market_configs_arc,
         notifier.clone(),
         telegram_bot_option,
+        config_repo_arc,
     );
 
     let port = 3001;

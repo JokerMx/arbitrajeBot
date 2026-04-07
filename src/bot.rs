@@ -119,8 +119,22 @@ impl TradingBot {
                 .find(|m| m.symbol == market.symbol)
                 .map(|m| m.enabled)
                 .unwrap_or(true);
+            
+            let was_enabled = market.is_enabled();
             market.set_enabled(enabled);
-            market.update_market_data().await;
+            
+            // Si se deshabilitó, cancelar órdenes
+            if was_enabled && !enabled {
+                info!("🛑 Mercado {} deshabilitado, cancelando órdenes...", market.symbol);
+                if let Err(e) = market.stop().await {
+                    error!("Error deteniendo mercado {}: {}", market.symbol, e);
+                }
+            }
+            
+            // Solo actualizar datos si está habilitado
+            if enabled {
+                market.update_market_data().await;
+            }
         }
     }
 

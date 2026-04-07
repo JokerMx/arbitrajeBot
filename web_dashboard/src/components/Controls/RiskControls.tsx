@@ -48,45 +48,45 @@ export const RiskControls: React.FC = () => {
       <div className="space-y-4">
         <div>
           <label className="block text-sm text-gray-400 mb-1">
-            Máx Posición (USD)
+            Máx Posición (% Capital)
           </label>
           <input
             type="range"
-            min="0.5"
-            max="5"
-            step="0.1"
-            value={localRisk.maxPositionSizeUsd}
+            min="0.05"
+            max="0.30"
+            step="0.01"
+            value={localRisk.maxPositionSizePct}
             onChange={(e) =>
-              handleChange("maxPositionSizeUsd", parseFloat(e.target.value))
+              handleChange("maxPositionSizePct", parseFloat(e.target.value))
             }
             className="w-full"
           />
           <div className="flex justify-between text-xs text-gray-500 mt-1">
-            <span>$0.5</span>
-            <span>${localRisk.maxPositionSizeUsd.toFixed(1)}</span>
-            <span>$5.0</span>
+            <span>5%</span>
+            <span>{(localRisk.maxPositionSizePct * 100).toFixed(0)}%</span>
+            <span>30%</span>
           </div>
         </div>
 
         <div>
           <label className="block text-sm text-gray-400 mb-1">
-            Pérdida Diaria Máx (USD)
+            Pérdida Diaria Máx (% Capital)
           </label>
           <input
             type="range"
-            min="1"
-            max="5"
-            step="0.5"
-            value={localRisk.maxDailyLossUsd}
+            min="0.05"
+            max="0.50"
+            step="0.05"
+            value={localRisk.maxDailyLossPct}
             onChange={(e) =>
-              handleChange("maxDailyLossUsd", parseFloat(e.target.value))
+              handleChange("maxDailyLossPct", parseFloat(e.target.value))
             }
             className="w-full"
           />
           <div className="flex justify-between text-xs text-gray-500 mt-1">
-            <span>$1</span>
-            <span>${localRisk.maxDailyLossUsd.toFixed(1)}</span>
-            <span>$5</span>
+            <span>5%</span>
+            <span>{(localRisk.maxDailyLossPct * 100).toFixed(0)}%</span>
+            <span>50%</span>
           </div>
         </div>
 
@@ -96,12 +96,12 @@ export const RiskControls: React.FC = () => {
           </label>
           <input
             type="range"
-            min="5"
-            max="30"
-            step="1"
-            value={localRisk.maxDrawdownPct * 100}
+            min="0.05"
+            max="0.30"
+            step="0.01"
+            value={localRisk.maxDrawdownPct}
             onChange={(e) =>
-              handleChange("maxDrawdownPct", parseFloat(e.target.value) / 100)
+              handleChange("maxDrawdownPct", parseFloat(e.target.value))
             }
             className="w-full"
           />
@@ -109,6 +109,28 @@ export const RiskControls: React.FC = () => {
             <span>5%</span>
             <span>{(localRisk.maxDrawdownPct * 100).toFixed(0)}%</span>
             <span>30%</span>
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm text-gray-400 mb-1">
+            Circuit Breaker (%)
+          </label>
+          <input
+            type="range"
+            min="0.01"
+            max="0.10"
+            step="0.01"
+            value={localRisk.circuitBreakerThreshold}
+            onChange={(e) =>
+              handleChange("circuitBreakerThreshold", parseFloat(e.target.value))
+            }
+            className="w-full"
+          />
+          <div className="flex justify-between text-xs text-gray-500 mt-1">
+            <span>1%</span>
+            <span>{(localRisk.circuitBreakerThreshold * 100).toFixed(0)}%</span>
+            <span>10%</span>
           </div>
         </div>
 

@@ -16,6 +16,7 @@ import {
   History,
   Users
 } from "lucide-react";
+import { useBotStore } from "../../store/botStore";
 
 interface SidebarItemProps {
   icon: React.ElementType;
@@ -66,6 +67,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ onNavigate, currentView }) => 
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const { stats } = useBotStore();
+  
+  const balance = stats?.balance ?? 0;
+  const pnlPercent = stats?.pnlPercent ?? 0;
+  const pnlColor = pnlPercent >= 0 ? "text-success" : "text-danger";
+  const pnlPrefix = pnlPercent >= 0 ? "+" : "";
 
   // Detectar si es móvil
   useEffect(() => {
@@ -162,8 +169,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ onNavigate, currentView }) => 
           <div className="absolute bottom-4 left-4 right-4">
             <div className="p-3 bg-dark-300 rounded-lg border border-dark-400">
               <p className="text-xs text-gray-400">Balance</p>
-              <p className="text-sm font-bold text-success">$14.99</p>
-              <p className="text-xs text-gray-500 mt-1">+49.85%</p>
+              <p className={`text-sm font-bold ${pnlColor}`}>${balance.toFixed(2)}</p>
+              <p className={`text-xs text-gray-500 mt-1 ${pnlColor}`}>{pnlPrefix}${pnlPercent.toFixed(2)}%</p>
             </div>
           </div>
         </aside>
@@ -207,13 +214,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ onNavigate, currentView }) => 
           {!collapsed && (
             <div className="mt-8 p-4 bg-dark-300/50 rounded-lg border border-dark-400">
               <p className="text-xs text-gray-400 mb-1">Balance</p>
-              <p className="text-lg font-bold text-success">$14.99</p>
+              <p className={`text-lg font-bold ${pnlColor}`}>${balance.toFixed(2)}</p>
               <div className="flex items-center justify-between mt-2">
                 <span className="text-xs text-gray-400">P&L</span>
-                <span className="text-xs text-success">+49.85%</span>
+                <span className={`text-xs ${pnlColor}`}>{pnlPrefix}{pnlPercent.toFixed(2)}%</span>
               </div>
               <div className="w-full h-1 bg-dark-400 rounded-full mt-2">
-                <div className="w-3/4 h-1 bg-success rounded-full"></div>
+                <div 
+                  className={`h-1 rounded-full ${pnlPercent >= 0 ? 'bg-success' : 'bg-danger'}`} 
+                  style={{ width: `${Math.min(Math.abs(pnlPercent), 100)}%` }}
+                ></div>
               </div>
             </div>
           )}

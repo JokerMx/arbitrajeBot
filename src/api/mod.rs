@@ -13,6 +13,7 @@ use crate::risk::RiskManager;
 use crate::types::{StrategyConfig, RiskConfig, MarketConfig};
 use crate::notifier::TelegramNotifier;
 use crate::telegram_bot::TelegramBot;
+use crate::db::ConfigRepository;
 
 
 pub fn api_routes(
@@ -23,6 +24,7 @@ pub fn api_routes(
     market_configs: Arc<Mutex<Vec<MarketConfig>>>,
     notifier: Arc<TelegramNotifier>,
     telegram_bot: Option<Arc<TelegramBot>>,
+    config_repo: Arc<ConfigRepository>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     
     let state = handlers::ApiState {
@@ -33,7 +35,7 @@ pub fn api_routes(
         market_configs,
         notifier,
         telegram_bot,
-        config_repo: None,
+        config_repo: Some(config_repo),
         bot_start_time: std::time::Instant::now(),
     };
     

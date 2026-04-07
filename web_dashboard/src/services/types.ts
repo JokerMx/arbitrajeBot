@@ -58,8 +58,8 @@ export interface StrategyConfig {
 }
 
 export interface RiskConfig {
-  maxPositionSizeUsd: number;
-  maxDailyLossUsd: number;
+  maxPositionSizePct: number;
+  maxDailyLossPct: number;
   maxDrawdownPct: number;
   killSwitchEnabled: boolean;
   circuitBreakerThreshold: number;

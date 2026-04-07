@@ -8,6 +8,8 @@ import { TradesTable } from "./components/Dashboard/TradesTable";
 import { StrategyControls } from "./components/Controls/StrategyControls";
 import { RiskControls } from "./components/Controls/RiskControls";
 import { MarketControls } from "./components/Controls/MarketControls";
+import { SystemSettings } from "./components/Controls/SystemSettings";
+import { TelegramSettings } from "./components/Controls/TelegramSettings";
 import { TelegramUsers } from "./components/Admin/TelegramUsers";
 import { useBotStore } from "./store/botStore";
 import { wsService } from "./services/websocket";
@@ -326,6 +328,8 @@ const SettingsView: React.FC = () => {
     <div className="space-y-6">
       <h2 className="text-2xl font-bold">Configuración General</h2>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <SystemSettings />
+        <TelegramSettings />
         <div className="bg-dark-200 rounded-xl p-6 border border-dark-300">
           <StrategyControls />
         </div>

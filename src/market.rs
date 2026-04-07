@@ -90,6 +90,10 @@ impl MarketManager {
         }
         self.enabled = enabled;
     }
+    
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
 
     pub async fn start(&mut self) -> anyhow::Result<()> {
         info!("Iniciando market maker para {} ({})", 
