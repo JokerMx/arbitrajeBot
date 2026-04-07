@@ -64,7 +64,7 @@ impl MarketManager {
         };
         Self {
             symbol: config.symbol.clone(),
-            config,
+            config: config.clone(),
             state: MarketState::Initializing,
             book: None,
             strategy,

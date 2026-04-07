@@ -24,6 +24,7 @@ pub struct TradingBot {
     risk_manager: Arc<Mutex<RiskManager>>,
     executor: Arc<OrderExecutor>,
     notifier: Arc<TelegramNotifier>,
+    market_configs: Arc<Mutex<Vec<MarketConfig>>>,
     _config: BotConfig,
 }
 
@@ -68,7 +69,7 @@ impl TradingBot {
 ).await?);
 
         let mut markets = HashMap::new();
-        for market_config in market_configs {
+        for market_config in &market_configs {
             if !market_config.enabled {
                 continue;
             }
@@ -94,6 +95,7 @@ impl TradingBot {
             risk_manager,
             executor,
             notifier,
+            market_configs: Arc::new(Mutex::new(market_configs)),
             _config: config,
         })
     }
@@ -110,9 +112,10 @@ impl TradingBot {
         Ok(())
     }
 
-    pub async fn update_markets(&mut self, market_configs: &[MarketConfig]) {
+    pub async fn update_markets(&mut self) {
+        let configs = self.market_configs.lock().await;
         for market in self.markets.values_mut() {
-            let enabled = market_configs.iter()
+            let enabled = configs.iter()
                 .find(|m| m.symbol == market.symbol)
                 .map(|m| m.enabled)
                 .unwrap_or(true);
@@ -201,15 +204,7 @@ impl TradingBot {
         loop {
             tokio::select! {
                 _ = update_interval.tick() => {
-                    let configs = self.markets.iter()
-                        .map(|(symbol, _)| {
-                            market_configs.iter()
-                                .find(|m| &m.symbol == symbol)
-                                .cloned()
-                        })
-                        .flatten()
-                        .collect::<Vec<_>>();
-                    self.update_markets(&configs).await;
+                    self.update_markets().await;
                 }
                 _ = &mut ctrl_c => {
                     info!("📡 Recibida señal Ctrl+C, deteniendo...");
