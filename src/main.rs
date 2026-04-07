@@ -92,18 +92,20 @@ async fn main() -> anyhow::Result<()> {
 
     let initial_capital = full_config.initial_capital;
 
-    // Construir lista de mercados
+    // Construir lista de mercados (solo los habilitados)
     let mut market_configs = Vec::new();
     for market in full_config.markets {
         if !market.enabled {
             continue;
         }
+        let margin = market.margin_alloc.to_f64().unwrap_or(0.10);
+        let min_s = market.min_size.to_f64().unwrap_or(0.00001);
         market_configs.push(MarketConfig {
             symbol: market.symbol.clone(),
-            asset_index: 0, // no se usa en API REST
+            asset_index: 0,
             enabled: market.enabled,
-            margin_alloc: market.margin_alloc.to_f64().unwrap_or(0.10),
-            min_size: market.min_size.to_f64().unwrap_or(0.00001),
+            margin_alloc: if margin.is_finite() && margin > 0.0 { margin } else { 0.10 },
+            min_size: if min_s.is_finite() && min_s > 0.0 { min_s } else { 0.00001 },
             price_decimals: market.price_decimals as u32,
             size_decimals: market.size_decimals as u32,
         });
