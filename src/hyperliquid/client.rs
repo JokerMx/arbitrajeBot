@@ -70,6 +70,15 @@ impl HyperliquidClient {
     pub fn get_market_info(&self, symbol: &str) -> Option<&MarketInfo> {
         self.cached_markets.get(symbol)
     }
+    
+    pub fn get_symbol_for_index(&self, index: u32) -> String {
+        for (name, info) in &self.cached_markets {
+            if info.index == index as usize {
+                return name.clone();
+            }
+        }
+        format!("unknown_{}", index)
+    }
 
     fn find_spot_token(&self, asset: &str) -> Option<hypercore::SpotToken> {
         self.cached_spot_tokens.iter()
@@ -156,12 +165,31 @@ impl HyperliquidClient {
     ) -> Result<HyperliquidOrderResponse> {
         let is_buy = side == HyperliquidOrderSide::Buy;
         
+        let symbol = self.get_symbol_for_index(asset_index);
+        let rounded_price = self.round_price(&symbol, price).unwrap_or(price);
+        let rounded_size = self.round_size(&symbol, quantity).unwrap_or(quantity);
+        
+        let order_value = rounded_size * rounded_price;
+        const MIN_ORDER_VALUE: f64 = 10.0;
+        
+        let final_size = if order_value < Decimal::from_f64(MIN_ORDER_VALUE).unwrap() {
+            let min_size = Decimal::from_f64(MIN_ORDER_VALUE).unwrap() / rounded_price;
+            self.round_size(&symbol, min_size).unwrap_or(min_size)
+        } else {
+            rounded_size
+        };
+        
+        let final_value = final_size * rounded_price;
+        
+        info!("📤 Placing order: asset={} ({}) side={} size={} price={} value=${:.2}", 
+            asset_index, symbol, is_buy, final_size, rounded_price, final_value);
+        
         let order = BatchOrder {
             orders: vec![OrderRequest {
                 asset: asset_index as usize,
                 is_buy,
-                limit_px: price,
-                sz: quantity,
+                limit_px: rounded_price,
+                sz: final_size,
                 reduce_only: false,
                 order_type: OrderTypePlacement::Limit {
                     tif: TimeInForce::Gtc,
@@ -174,7 +202,10 @@ impl HyperliquidClient {
         let nonce = self.nonce_handler.next();
         
         let result = self.http_client.place(&self.signer, order, nonce, None, None).await
-            .map_err(|e| anyhow!("Order failed: {}", e))?;
+            .map_err(|e| {
+                error!("❌ Order failed: asset={}, error={}", asset_index, e);
+                anyhow!("Order failed: {}", e)
+            })?;
 
         if result.is_empty() {
             warn!("No statuses in response");

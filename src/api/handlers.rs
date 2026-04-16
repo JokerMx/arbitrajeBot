@@ -11,7 +11,6 @@ use crate::types::{StrategyConfig, RiskConfig, MarketConfig};
 use crate::notifier::TelegramNotifier;
 use crate::telegram_bot::TelegramBot;
 use crate::db::ConfigRepository;
-use crate::db::models::ProtectionConfigDB;
 use tracing::info;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
@@ -35,6 +34,7 @@ pub struct ApiState {
     pub exchange_type: Arc<Mutex<String>>,
     pub leverage_configs: Arc<Mutex<std::collections::HashMap<String, i32>>>,
     pub protection_config: Arc<Mutex<crate::db::models::ProtectionConfigDB>>,
+    pub telegram_config: Arc<Mutex<crate::db::models::TelegramConfigDB>>,
 }
 
 // =============================================
@@ -121,6 +121,9 @@ pub async fn get_config(state: ApiState) -> Result<impl Reply, Rejection> {
     let risk_mgr = state.risk_manager.lock().await;
     let leverage_configs = state.leverage_configs.lock().await;
     let protection = state.protection_config.lock().await;
+    let telegram = state.telegram_config.lock().await;
+    
+    info!("📊 get_config: {} mercados, leverage configs: {}", markets.len(), leverage_configs.len());
     
     let leverage: Vec<LeverageResponse> = leverage_configs.iter()
         .map(|(k, v)| {
@@ -160,12 +163,12 @@ pub async fn get_config(state: ApiState) -> Result<impl Reply, Rejection> {
             min_size: m.min_size,
         }).collect(),
         telegram: TelegramConfigResponse {
-            enabled: false,
-            bot_token: "".to_string(),
-            chat_id: "".to_string(),
-            notify_orders: true,
-            notify_fills: true,
-            notify_status: true,
+            enabled: telegram.enabled,
+            bot_token: telegram.bot_token.clone().unwrap_or_default(),
+            chat_id: telegram.chat_id.clone().unwrap_or_default(),
+            notify_orders: telegram.notify_orders,
+            notify_fills: telegram.notify_fills,
+            notify_status: telegram.notify_status,
         },
         initial_capital: risk_mgr.initial_capital().to_f64().unwrap_or(10.0),
         leverage,
@@ -327,7 +330,7 @@ pub async fn restart_bot(state: ApiState) -> Result<impl Reply, Rejection> {
     })))
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Debug)]
 pub struct UpdateExchangeRequest {
     pub exchange_type: Option<String>,
     pub network: Option<String>,
@@ -338,21 +341,23 @@ pub async fn update_exchange(
     update: UpdateExchangeRequest,
     state: ApiState,
 ) -> Result<impl Reply, Rejection> {
-    if let Some(exchange_type) = update.exchange_type {
+    info!("📡 update_exchange recibido: {:?}", update);
+    
+    if let Some(exchange_type) = &update.exchange_type {
+        info!("🔄 Cambiando exchange_type a: {}", exchange_type);
         let mut current = state.exchange_type.lock().await;
-        if *current != exchange_type {
+        if *current != *exchange_type {
             info!("🔄 Cambiando exchange: {} -> {}", current, exchange_type);
             *current = exchange_type.clone();
-            
-            let mut bot = state.bot.lock().await;
-            bot.notify_exchange_change(&exchange_type).await;
         }
     }
     
-    Ok(json(&serde_json::json!({
+    let response = json(&serde_json::json!({
         "status": "success",
         "message": "Exchange actualizado. El cambio se aplicará en ~10 segundos."
-    })))
+    }));
+    info!("📤 Respondiendo con success");
+    Ok(response)
 }
 
 // =============================================

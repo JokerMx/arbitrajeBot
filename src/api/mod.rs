@@ -27,9 +27,10 @@ pub fn api_routes(
     telegram_bot: Option<Arc<TelegramBot>>,
     config_repo: Arc<ConfigRepository>,
     exchange_type: String,
-    protection_config: ProtectionConfigDB,
+    _protection_config: ProtectionConfigDB,
     leverage_configs: Arc<Mutex<std::collections::HashMap<String, i32>>>,
     protection_arc: Arc<Mutex<ProtectionConfigDB>>,
+    telegram_config: Arc<Mutex<crate::db::models::TelegramConfigDB>>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     
     let exchange_type_arc = Arc::new(Mutex::new(exchange_type));
@@ -47,6 +48,7 @@ pub fn api_routes(
         exchange_type: exchange_type_arc,
         leverage_configs,
         protection_config: protection_arc,
+        telegram_config,
     };
     
     let state_filter = warp::any().map(move || state.clone());

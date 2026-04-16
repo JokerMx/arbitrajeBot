@@ -3,13 +3,13 @@
 use anyhow::{Result, anyhow};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use reqwest::Client;
-use hmac::{Hmac, Mac};
+use hmac::Hmac;
 use sha2::Sha256;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::collections::HashMap;
-use tracing::{info, warn, error};
+use tracing::info;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -83,7 +83,7 @@ impl BybitClient {
         }
     }
 
-    fn generate_signature(&self, mut params: HashMap<String, String>, timestamp: i64) -> String {
+    fn generate_signature(&self, params: HashMap<String, String>, timestamp: i64) -> String {
         let api_key = self.api_key.clone();
         
         let mut sorted_keys: Vec<&String> = params.keys().collect();
@@ -106,7 +106,6 @@ impl BybitClient {
     }
 
     pub async fn get_ticker(&self, symbol: &str) -> Result<super::BybitTicker> {
-        let endpoint = "/v5/market/tickers";
         let url = format!("{}?category=spot&symbol={}", self.base_url, symbol);
         
         let response = self.client.get(&url).send().await?;
@@ -135,7 +134,7 @@ impl BybitClient {
         Ok((ticker.bid_price + ticker.ask_price) / Decimal::from_f64(2.0).unwrap())
     }
 
-    pub async fn get_balance(&self, asset: &str) -> Result<Decimal> {
+    pub async fn get_balance(&self, _asset: &str) -> Result<Decimal> {
         let endpoint = "/v5/account/wallet-balance";
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)?

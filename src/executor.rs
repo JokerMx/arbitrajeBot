@@ -139,6 +139,25 @@ impl OrderExecutor {
         }
     }
 
+    pub async fn get_account_state(&self) -> Result<crate::hyperliquid::HyperliquidAccountState> {
+        match self.exchange {
+            ExchangeType::HyperliquidMainnet => {
+                if let Some(client) = &self.client {
+                    client.get_account_state().await
+                } else {
+                    Ok(crate::hyperliquid::HyperliquidAccountState {
+                        balances: std::collections::HashMap::new(),
+                        wallet_address: String::new(),
+                    })
+                }
+            }
+            _ => Ok(crate::hyperliquid::HyperliquidAccountState {
+                balances: std::collections::HashMap::new(),
+                wallet_address: String::new(),
+            })
+        }
+    }
+    
     pub async fn get_balance(&self, asset: &str) -> Result<Decimal> {
         match self.exchange {
             ExchangeType::HyperliquidMainnet => {

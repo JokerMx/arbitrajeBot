@@ -5,7 +5,6 @@ use anyhow::Result;
 use tracing::{info, debug};
 use rust_decimal::Decimal;
 use std::str::FromStr;
-use std::str::FromStr as _;
 
 use super::{Database, models::*};
 
@@ -279,36 +278,56 @@ impl ConfigRepository {
         Ok(())
     }
     
-    /// Obtener todos los mercados - usando String para leer decimales
+    /// Obtener todos los mercados - prioridad .env > BD
     pub async fn get_markets(&self) -> Result<Vec<MarketConfigDB>> {
-        let table = format!("{}markets", self.table_prefix);
+        let _table = format!("{}markets", self.table_prefix);
         
-        let rows = sqlx::query(&format!(
-            r#"SELECT symbol, enabled, CAST(margin_alloc AS CHAR), CAST(min_size AS CHAR), price_decimals, size_decimals 
-               FROM `{}` ORDER BY symbol"#,
-            table
-        ))
-        .fetch_all(&self.pool)
-        .await?;
-        
+        let symbols = vec!["BTC", "ETH", "BNB", "SOL", "XRP"];
         let mut markets = Vec::new();
         
-        for row in rows {
-            let margin_alloc_str: String = row.get(2);
-            let min_size_str: String = row.get(3);
+        // Leer cada símbolo desde .env y sincronizar con BD
+        for symbol in &symbols {
+            let enabled = std::env::var(format!("MARKETS_ENABLED_{}", symbol))
+                .unwrap_or_else(|_| "false".to_string())
+                .parse()
+                .unwrap_or(false);
+            
+            let margin_alloc = Decimal::from_str(
+                &std::env::var(format!("MARKETS_MARGIN_ALLOC_{}", symbol))
+                    .unwrap_or_else(|_| "0.10".to_string())
+            ).unwrap_or(Decimal::new(10, 2));
+            
+            let min_size = Decimal::from_str(
+                &std::env::var(format!("MARKETS_MIN_SIZE_{}", symbol))
+                    .unwrap_or_else(|_| "0.00001".to_string())
+            ).unwrap_or(Decimal::new(1, 5));
+            
+            let price_decimals = match *symbol {
+                "BTC" | "ETH" => 1,
+                "BNB" | "SOL" => 2,
+                _ => 2,
+            };
+            
+            let size_decimals = match *symbol {
+                "BTC" => 8,
+                "ETH" => 6,
+                "BNB" => 5,
+                "SOL" => 4,
+                "XRP" => 2,
+                _ => 8,
+            };
+            
+            // Sincronizar con BD
+            let _ = self.update_market(symbol, Some(enabled), Some(margin_alloc), Some(min_size)).await;
             
             markets.push(MarketConfigDB {
-                symbol: row.get(0),
-                enabled: row.get(1),
-                margin_alloc: Decimal::from_str(&margin_alloc_str)?,
-                min_size: Decimal::from_str(&min_size_str)?,
-                price_decimals: row.get(4),
-                size_decimals: row.get(5),
+                symbol: symbol.to_string(),
+                enabled,
+                margin_alloc,
+                min_size,
+                price_decimals,
+                size_decimals,
             });
-        }
-        
-        if markets.is_empty() {
-            markets = self.create_default_markets().await?;
         }
         
         Ok(markets)
@@ -405,6 +424,35 @@ impl ConfigRepository {
     /// Actualizar un mercado
     pub async fn update_market(&self, symbol: &str, enabled: Option<bool>, margin_alloc: Option<Decimal>, min_size: Option<Decimal>) -> Result<()> {
         let table = format!("{}markets", self.table_prefix);
+        
+        // Verificar si existe
+        let exists: Vec<_> = sqlx::query(&format!(
+            r#"SELECT symbol FROM `{}` WHERE symbol = ?"#,
+            table
+        ))
+        .bind(symbol)
+        .fetch_all(&self.pool)
+        .await?;
+
+        if exists.is_empty() {
+            // Insertar si no existe
+            let margin_str = margin_alloc.unwrap_or(Decimal::new(10, 2)).to_string();
+            let min_str = min_size.unwrap_or(Decimal::new(1, 5)).to_string();
+            sqlx::query(&format!(
+                r#"INSERT INTO `{}` (symbol, enabled, margin_alloc, min_size, price_decimals, size_decimals) VALUES (?, ?, ?, ?, ?, ?)"#,
+                table
+            ))
+            .bind(symbol)
+            .bind(enabled.unwrap_or(false))
+            .bind(margin_str)
+            .bind(min_str)
+            .bind(1)
+            .bind(8)
+            .execute(&self.pool)
+            .await?;
+            info!("✅ Mercado {} creado", symbol);
+            return Ok(());
+        }
         
         if let Some(enabled_val) = enabled {
             sqlx::query(&format!(
@@ -511,6 +559,9 @@ impl ConfigRepository {
     pub async fn get_leverage(&self, exchange: &str, symbol: &str) -> Result<LeverageConfigDB> {
         let table = format!("{}leverage", self.table_prefix);
         
+        let env_key = format!("LEVERAGE_{}_{}", exchange.to_uppercase(), symbol.to_uppercase());
+        let env_value = std::env::var(&env_key);
+        
         let row = sqlx::query(&format!(
             r#"SELECT CAST(leverage AS CHAR), CAST(max_leverage AS CHAR) FROM `{}` WHERE exchange = ? AND symbol = ?"#,
             table
@@ -519,6 +570,28 @@ impl ConfigRepository {
         .bind(symbol)
         .fetch_optional(&self.pool)
         .await?;
+        
+        // Prioridad: .env > BD
+        if let Ok(env_leverage) = env_value {
+            let leverage: i32 = env_leverage.parse().unwrap_or(1);
+            let max_leverage = read_env_or_default("MAX_ALLOWABLE_LEVERAGE", 10);
+            info!("📈 Leverage desde .env: {}={} para {}/{}", env_key, leverage, exchange, symbol);
+            
+            // Guardar en BD si es diferente
+            if let Some(row) = row {
+                let db_leverage: String = row.get(0);
+                if db_leverage.parse::<i32>().unwrap_or(1) != leverage {
+                    let _ = self.update_leverage(exchange, symbol, leverage, max_leverage).await;
+                }
+            }
+            
+            return Ok(LeverageConfigDB {
+                exchange: exchange.to_string(),
+                symbol: symbol.to_string(),
+                leverage,
+                max_leverage,
+            });
+        }
         
         if let Some(row) = row {
             let leverage_str: String = row.get(0);
@@ -531,11 +604,7 @@ impl ConfigRepository {
                 max_leverage: max_leverage_str.parse().unwrap_or(10),
             })
         } else {
-            let env_key = format!("LEVERAGE_{}_{}", exchange.to_uppercase(), symbol.to_uppercase());
-            let leverage = std::env::var(&env_key)
-                .unwrap_or_else(|_| "1".to_string())
-                .parse()
-                .unwrap_or(1);
+            let leverage = 1;
             let max_leverage = read_env_or_default("MAX_ALLOWABLE_LEVERAGE", 10);
             
             Ok(LeverageConfigDB {

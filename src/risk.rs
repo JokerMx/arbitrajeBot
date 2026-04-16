@@ -5,7 +5,7 @@ use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::VecDeque;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use crate::db::models::ProtectionConfigDB;
 use crate::types::{OrderRequest, OrderSide, Position, RiskConfig, RiskStatus, Trade};
@@ -141,7 +141,7 @@ impl RiskManager {
     ) -> (bool, String) {
         let leverage = self.get_leverage(exchange, symbol);
         let order_value = size * price;
-        let leveraged_value = order_value * Decimal::from_f64(leverage as f64).unwrap_or(dec!(1));
+        let margin_used = order_value / Decimal::from_f64(leverage as f64).unwrap_or(dec!(1));
 
         let max_leverage = self.protection.max_leverage as i32;
         if leverage > max_leverage {
@@ -154,21 +154,22 @@ impl RiskManager {
             );
         }
 
-        let max_capital_at_risk = self.current_balance
+        let max_capital_at_risk = (self.initial_capital
             * Decimal::from_f64(
                 self.protection
                     .max_capital_at_risk_pct
                     .to_f64()
                     .unwrap_or(0.25),
             )
-            .unwrap_or(dec!(12.50));
+            .unwrap_or(dec!(12.50)))
+        .max(Decimal::from_f64(10.0).unwrap_or(dec!(10)));
 
-        if leveraged_value > max_capital_at_risk && leverage > 1 {
+        if margin_used > max_capital_at_risk {
             return (
                 false,
                 format!(
-                    "⚠️ Posición apalancada ${:.2} > Máximo riesgo ${:.2}",
-                    leveraged_value, max_capital_at_risk
+                    "⚠️ Margen ${:.2} > Máximo riesgo ${:.2}",
+                    margin_used, max_capital_at_risk
                 ),
             );
         }
@@ -198,11 +199,22 @@ impl RiskManager {
     // LÍMITES DINÁMICOS BASADOS EN CAPITAL
     // =============================================
 
-    /// Obtener límite máximo de posición basado en capital actual
+    /// Obtener límite máximo de posición basado en capital actual y apalancamiento
     fn get_max_position_usd(&self) -> Decimal {
         let max_position_pct =
             Decimal::from_f64(self.config.max_position_size_pct).unwrap_or(dec!(0.15));
-        (self.current_balance * max_position_pct).max(dec!(0.01))
+        let base_max = (self.current_balance * max_position_pct).max(dec!(0.01));
+        let leverage = self.get_leverage("simulated", "BTC");
+        base_max * Decimal::from_f64(leverage as f64).unwrap_or(dec!(1))
+    }
+
+    /// Obtener límite máximo de posición para un símbolo específico con su apalancamiento
+    pub fn get_max_position_for_symbol(&self, exchange: &str, symbol: &str) -> Decimal {
+        let max_position_pct =
+            Decimal::from_f64(self.config.max_position_size_pct).unwrap_or(dec!(0.15));
+        let base_max = (self.current_balance * max_position_pct).max(dec!(0.01));
+        let leverage = self.get_leverage(exchange, symbol);
+        base_max * Decimal::from_f64(leverage as f64).unwrap_or(dec!(1))
     }
 
     /// Obtener límite diario de pérdidas basado en capital inicial
@@ -230,11 +242,7 @@ impl RiskManager {
             return false;
         }
 
-        let exchange = if order.symbol.contains("BTC") || order.symbol.contains("ETH") {
-            "simulated"
-        } else {
-            "simulated"
-        };
+        let exchange = "hyperliquid";
 
         let (valid, msg) = self.validate_order_with_protection(
             exchange,
@@ -255,12 +263,13 @@ impl RiskManager {
         }
 
         let order_value = order.quantity * current_price;
-        let max_order_pct = Decimal::from_f64(0.25).unwrap();
-        let max_order_value = self.current_balance * max_order_pct;
+        let max_order_pct = Decimal::from_f64(0.50).unwrap();
+        let base_limit = (self.initial_capital * max_order_pct).max(dec!(10));
+        let max_order_value = base_limit;
 
         if order_value > max_order_value {
             warn!(
-                "📊 Orden demasiado grande: ${:.2} > 25% del balance (${:.2})",
+                "📊 Orden demasiado grande: ${:.2} > 50% del capital (${:.2})",
                 order_value, max_order_value
             );
             return false;
@@ -534,8 +543,8 @@ impl RiskManager {
         &self.positions
     }
 
-    pub fn max_position_usd(&self) -> Decimal {
-        self.get_max_position_usd()
+    pub fn max_position_usd(&self, exchange: &str, symbol: &str) -> Decimal {
+        self.get_max_position_for_symbol(exchange, symbol)
     }
 
     pub fn max_daily_loss_usd(&self) -> Decimal {

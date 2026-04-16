@@ -3,7 +3,7 @@
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use rust_decimal::prelude::ToPrimitive;
-use tracing::{info, error};
+use tracing::{info, error, warn};
 use tokio::sync::Mutex;
 use std::sync::Arc;
 use std::collections::HashMap;
@@ -17,6 +17,7 @@ use crate::risk::RiskManager;
 use crate::executor::OrderExecutor;
 use crate::notifier::TelegramNotifier;
 use crate::executor::ExchangeType;
+use crate::hyperliquid::HyperliquidClient;
 
 #[derive(Clone)]
 pub struct TradingBot {
@@ -24,7 +25,6 @@ pub struct TradingBot {
     risk_manager: Arc<Mutex<RiskManager>>,
     executor: Arc<OrderExecutor>,
     notifier: Arc<TelegramNotifier>,
-    market_configs: Arc<Mutex<Vec<MarketConfig>>>,
     _config: BotConfig,
 }
 
@@ -59,29 +59,45 @@ impl TradingBot {
         notifier: Arc<TelegramNotifier>,
         risk_manager: Arc<Mutex<RiskManager>>,
         exchange_type: ExchangeType,
-        executor: Arc<OrderExecutor>,
     ) -> anyhow::Result<Self> {
         info!("Inicializando TradingBot en red: {}", config.network);
-
+        
+        let is_testnet = config.network == "testnet";
+        let executor = Arc::new(OrderExecutor::new(
+            &config.private_key,
+            exchange_type,
+            None,
+            None,
+            is_testnet,
+        ).await?);
+        
+        // Crear cliente Hyperliquid (una sola vez para todos los mercados)
+        let hyperliquid_client = Arc::new(HyperliquidClient::new(&config.private_key, !is_testnet).await?);
+        
         let mut markets = HashMap::new();
-        for market_config in &market_configs {
+        for mut market_config in market_configs {
             if !market_config.enabled {
                 continue;
+            }
+            
+            if let Some(info) = hyperliquid_client.get_market_info(&market_config.symbol) {
+                market_config.asset_index = info.index as u32;
+                info!("✅ {} -> asset_index: {}", market_config.symbol, market_config.asset_index);
+            } else {
+                warn!("⚠️ Mercado {} no encontrado, usando asset_index: {}", market_config.symbol, market_config.asset_index);
             }
             
             info!("Configurando market maker para {}", market_config.symbol);
             
             let strategy = AvellanedaStoikov::new(strategy_config.clone());
-            let is_mainnet = matches!(exchange_type, ExchangeType::HyperliquidMainnet);
-            let is_bybit = matches!(exchange_type, ExchangeType::Bybit);
             let market = MarketManager::new(
                 market_config.clone(),
+                hyperliquid_client.clone(),
                 strategy,
                 risk_manager.clone(),
                 executor.clone(),
                 notifier.clone(),
-                is_mainnet,
-                is_bybit,
+                exchange_type,
             );
             
             markets.insert(market_config.symbol.clone(), market);
@@ -92,7 +108,6 @@ impl TradingBot {
             risk_manager,
             executor,
             notifier,
-            market_configs: Arc::new(Mutex::new(market_configs)),
             _config: config,
         })
     }
@@ -110,35 +125,12 @@ impl TradingBot {
     }
 
     pub async fn update_markets(&mut self) {
-        let configs = self.market_configs.lock().await;
         for market in self.markets.values_mut() {
-            let enabled = configs.iter()
-                .find(|m| m.symbol == market.symbol)
-                .map(|m| m.enabled)
-                .unwrap_or(true);
-            
-            let was_enabled = market.is_enabled();
-            market.set_enabled(enabled);
-            
-            // Si se deshabilitó, cancelar órdenes
-            if was_enabled && !enabled {
-                info!("🛑 Mercado {} deshabilitado, cancelando órdenes...", market.symbol);
-                if let Err(e) = market.stop().await {
-                    error!("Error deteniendo mercado {}: {}", market.symbol, e);
-                }
-            }
-            
-            // Solo actualizar datos si está habilitado
-            if enabled {
-                market.update_market_data().await;
-            }
+            market.update_market_data().await;
         }
-    }
-
-    pub async fn notify_exchange_change(&mut self, new_exchange: &str) {
-        info!("🔄 Notificando cambio de exchange a los mercados: {}", new_exchange);
-        for market in self.markets.values_mut() {
-            market.set_exchange(new_exchange);
+        
+        if let Ok(state) = self.executor.get_account_state().await {
+            info!("📊 Account state: {:?}", state.balances);
         }
     }
 

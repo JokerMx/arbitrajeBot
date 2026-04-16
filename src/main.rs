@@ -248,7 +248,6 @@ async fn main() -> anyhow::Result<()> {
         notifier.clone(),
         risk_manager.clone(),
         exchange_type,
-        executor.clone(),
     )
     .await?;
     let bot = Arc::new(Mutex::new(bot));
@@ -299,6 +298,7 @@ async fn main() -> anyhow::Result<()> {
         map
     }));
     let protection_arc = Arc::new(Mutex::new(full_config.protection.clone()));
+    let telegram_arc = Arc::new(Mutex::new(full_config.telegram.clone()));
     
     let api_routes = api_routes(
         bot.clone(),
@@ -313,6 +313,7 @@ async fn main() -> anyhow::Result<()> {
         full_config.protection.clone(),
         leverage_configs,
         protection_arc,
+        telegram_arc,
     );
 
     let port = 3001;
