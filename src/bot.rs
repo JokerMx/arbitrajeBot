@@ -3,7 +3,7 @@
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use rust_decimal::prelude::ToPrimitive;
-use tracing::{info, error};
+use tracing::{info, error, warn};
 use tokio::sync::Mutex;
 use std::sync::Arc;
 use std::collections::HashMap;
@@ -16,6 +16,8 @@ use crate::strategy::AvellanedaStoikov;
 use crate::risk::RiskManager;
 use crate::executor::OrderExecutor;
 use crate::notifier::TelegramNotifier;
+use crate::executor::ExchangeType;
+use crate::hyperliquid::HyperliquidClient;
 
 #[derive(Clone)]
 pub struct TradingBot {
@@ -56,19 +58,33 @@ impl TradingBot {
         _initial_capital: Decimal,
         notifier: Arc<TelegramNotifier>,
         risk_manager: Arc<Mutex<RiskManager>>,
+        exchange_type: ExchangeType,
     ) -> anyhow::Result<Self> {
         info!("Inicializando TradingBot en red: {}", config.network);
         
         let is_testnet = config.network == "testnet";
         let executor = Arc::new(OrderExecutor::new(
             &config.private_key,
+            exchange_type,
+            None,
+            None,
             is_testnet,
         ).await?);
         
+        // Crear cliente Hyperliquid (una sola vez para todos los mercados)
+        let hyperliquid_client = Arc::new(HyperliquidClient::new(&config.private_key, !is_testnet).await?);
+        
         let mut markets = HashMap::new();
-        for market_config in market_configs {
+        for mut market_config in market_configs {
             if !market_config.enabled {
                 continue;
+            }
+            
+            if let Some(info) = hyperliquid_client.get_market_info(&market_config.symbol) {
+                market_config.asset_index = info.index as u32;
+                info!("✅ {} -> asset_index: {}", market_config.symbol, market_config.asset_index);
+            } else {
+                warn!("⚠️ Mercado {} no encontrado, usando asset_index: {}", market_config.symbol, market_config.asset_index);
             }
             
             info!("Configurando market maker para {}", market_config.symbol);
@@ -76,10 +92,12 @@ impl TradingBot {
             let strategy = AvellanedaStoikov::new(strategy_config.clone());
             let market = MarketManager::new(
                 market_config.clone(),
+                hyperliquid_client.clone(),
                 strategy,
                 risk_manager.clone(),
                 executor.clone(),
                 notifier.clone(),
+                exchange_type,
             );
             
             markets.insert(market_config.symbol.clone(), market);
@@ -109,6 +127,10 @@ impl TradingBot {
     pub async fn update_markets(&mut self) {
         for market in self.markets.values_mut() {
             market.update_market_data().await;
+        }
+        
+        if let Ok(state) = self.executor.get_account_state().await {
+            info!("📊 Account state: {:?}", state.balances);
         }
     }
 
@@ -168,7 +190,6 @@ impl TradingBot {
             
             drop(risk);
             
-            // Enviar notificación de estado si está habilitado
             if notifier.should_notify_status().await {
                 let status_msg = notifier.format_status(balance, pnl, win_rate, drawdown);
                 let _ = notifier.send_message(&status_msg).await;

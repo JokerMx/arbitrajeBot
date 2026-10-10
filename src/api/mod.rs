@@ -13,6 +13,9 @@ use crate::risk::RiskManager;
 use crate::types::{StrategyConfig, RiskConfig, MarketConfig};
 use crate::notifier::TelegramNotifier;
 use crate::telegram_bot::TelegramBot;
+use crate::db::ConfigRepository;
+use crate::db::models::ProtectionConfigDB;
+
 
 pub fn api_routes(
     bot: Arc<Mutex<TradingBot>>,
@@ -21,8 +24,16 @@ pub fn api_routes(
     risk_config: Arc<Mutex<RiskConfig>>,
     market_configs: Arc<Mutex<Vec<MarketConfig>>>,
     notifier: Arc<TelegramNotifier>,
-    telegram_bot: Option<Arc<TelegramBot>>,  // Usamos Option<Arc<TelegramBot>>
+    telegram_bot: Option<Arc<TelegramBot>>,
+    config_repo: Arc<ConfigRepository>,
+    exchange_type: String,
+    _protection_config: ProtectionConfigDB,
+    leverage_configs: Arc<Mutex<std::collections::HashMap<String, i32>>>,
+    protection_arc: Arc<Mutex<ProtectionConfigDB>>,
+    telegram_config: Arc<Mutex<crate::db::models::TelegramConfigDB>>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+    
+    let exchange_type_arc = Arc::new(Mutex::new(exchange_type));
     
     let state = handlers::ApiState {
         bot,
@@ -31,7 +42,13 @@ pub fn api_routes(
         risk_config,
         market_configs,
         notifier,
-        telegram_bot,  // Pasar directamente el Option
+        telegram_bot,
+        config_repo: Some(config_repo),
+        bot_start_time: std::time::Instant::now(),
+        exchange_type: exchange_type_arc,
+        leverage_configs,
+        protection_config: protection_arc,
+        telegram_config,
     };
     
     let state_filter = warp::any().map(move || state.clone());
@@ -80,7 +97,17 @@ pub fn api_routes(
         .and_then(handlers::restart_bot);
     
     // =============================================
-    // RUTAS DE TELEGRAM - GESTIÓN DE USUARIOS
+    // RUTAS DE EXCHANGE
+    // =============================================
+    
+    let update_exchange = warp::path!("api" / "exchange")
+        .and(warp::post())
+        .and(warp::body::json())
+        .and(state_filter.clone())
+        .and_then(handlers::update_exchange);
+    
+    // =============================================
+    // RUTAS DE TELEGRAM
     // =============================================
     
     let telegram_users = warp::path!("api" / "telegram" / "users")
@@ -139,30 +166,27 @@ pub fn api_routes(
         .and_then(server::websocket_handler);
     
     // =============================================
-    // ARCHIVOS ESTÁTICOS DEL DASHBOARD (SPA)
+    // ARCHIVOS ESTÁTICOS DEL DASHBOARD
     // =============================================
     
-    // Servir /dashboard y /dashboard/ con el index del SPA
+    let static_files = warp::path("dashboard")
+        .and(warp::fs::dir("./web_dashboard/dist"));
+    
     let dashboard_index = warp::path("dashboard")
         .and(warp::path::end())
-        .and(warp::get())
-        .map(|| warp::reply::html(include_str!("../../web_dashboard/dist/index.html")));
-
-    // Fallback SPA para rutas cliente como /dashboard/stats
-    let dashboard_spa_fallback = warp::path("dashboard")
-        .and(warp::path::tail())
-        .and(warp::get())
-        .map(|_| warp::reply::html(include_str!("../../web_dashboard/dist/index.html")));
+        .and(warp::fs::file("./web_dashboard/dist/index.html"));
     
-    // Servir assets compilados sin pasar por la raíz del directorio dist
-    let static_assets = warp::path("dashboard")
-        .and(warp::path("assets"))
-        .and(warp::fs::dir("./web_dashboard/dist/assets"));
+    let dashboard_redirect = warp::path("dashboard")
+        .and(warp::path::end())
+        .map(|| {
+            warp::redirect::redirect(warp::http::Uri::from_static("/dashboard/"))
+        });
     
-    // Evitar redirecciones: servir dashboard directamente en /
     let root = warp::path::end()
         .and(warp::get())
-        .map(|| warp::reply::html(include_str!("../../web_dashboard/dist/index.html")));
+        .map(|| {
+            warp::redirect::redirect(warp::http::Uri::from_static("/dashboard/"))
+        });
     
     // =============================================
     // CORS
@@ -183,6 +207,7 @@ pub fn api_routes(
         .or(start)
         .or(stop)
         .or(restart)
+        .or(update_exchange)
         .or(telegram_users)
         .or(telegram_stats)
         .or(telegram_authorize)
@@ -193,9 +218,9 @@ pub fn api_routes(
         .or(telegram_broadcast)
         .or(telegram_commands)
         .or(ws)
-        .or(static_assets)
         .or(dashboard_index)
-        .or(dashboard_spa_fallback)
+        .or(static_files)
+        .or(dashboard_redirect)
         .or(root)
         .with(cors)
         .recover(handlers::handle_rejection);

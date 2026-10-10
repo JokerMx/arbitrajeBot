@@ -5,33 +5,35 @@ import {
   StrategyConfig, 
   RiskConfig, 
   MarketConfig, 
-  TelegramConfig 
+  TelegramConfig,
+  LeverageConfig,
+  ProtectionConfig
 } from "../services/types";
 import { backendApiBaseUrl } from "../services/backendConfig";
 
 const DEFAULT_CONFIG: FullConfig = {
   strategy: {
-    baseSpreadTicks: 8,
-    riskAversion: 0.25,
-    marketImpact: 0.02,
-    inventorySkewStrength: 0.2,
+    baseSpreadTicks: 10,
+    riskAversion: 0.15,
+    marketImpact: 0.01,
+    inventorySkewStrength: 0.15,
     volatilityLookbackMinutes: 20,
     orderRefreshMs: 30000,
-    maxInventoryRatio: 0.15,
+    maxInventoryRatio: 0.10,
   },
   risk: {
-    maxPositionSizeUsd: 1.5,
-    maxDailyLossUsd: 3.0,
-    maxDrawdownPct: 0.2,
+    maxPositionSizePct: 0.10,
+    maxDailyLossPct: 0.20,
+    maxDrawdownPct: 0.15,
     killSwitchEnabled: true,
-    circuitBreakerThreshold: 0.05,
+    circuitBreakerThreshold: 0.03,
   },
   markets: [
-    { symbol: "BTC", enabled: true, marginAlloc: 0.12, minSize: 0.00001 },
-    { symbol: "ETH", enabled: true, marginAlloc: 0.12, minSize: 0.0001 },
-    { symbol: "BNB", enabled: true, marginAlloc: 0.12, minSize: 0.001 },
-    { symbol: "SOL", enabled: true, marginAlloc: 0.12, minSize: 0.01 },
-    { symbol: "XRP", enabled: true, marginAlloc: 0.12, minSize: 0.5 },
+    { symbol: "BTC", enabled: true, marginAlloc: 0.10, minSize: 0.00001 },
+    { symbol: "ETH", enabled: false, marginAlloc: 0.10, minSize: 0.0001 },
+    { symbol: "BNB", enabled: false, marginAlloc: 0.10, minSize: 0.001 },
+    { symbol: "SOL", enabled: false, marginAlloc: 0.10, minSize: 0.01 },
+    { symbol: "XRP", enabled: false, marginAlloc: 0.10, minSize: 0.5 },
   ],
   telegram: {
     enabled: false,
@@ -41,7 +43,31 @@ const DEFAULT_CONFIG: FullConfig = {
     notifyFills: true,
     notifyStatus: true,
   },
-  initialCapital: 10,
+  initialCapital: 50,
+  leverage: [
+    { exchange: "simulated", symbol: "BTC", leverage: 1, maxLeverage: 10 },
+    { exchange: "simulated", symbol: "ETH", leverage: 1, maxLeverage: 10 },
+    { exchange: "simulated", symbol: "BNB", leverage: 1, maxLeverage: 10 },
+    { exchange: "simulated", symbol: "SOL", leverage: 1, maxLeverage: 10 },
+    { exchange: "simulated", symbol: "XRP", leverage: 1, maxLeverage: 10 },
+    { exchange: "hyperliquid_mainnet", symbol: "BTC", leverage: 1, maxLeverage: 10 },
+    { exchange: "hyperliquid_mainnet", symbol: "ETH", leverage: 1, maxLeverage: 10 },
+    { exchange: "hyperliquid_mainnet", symbol: "BNB", leverage: 1, maxLeverage: 10 },
+    { exchange: "hyperliquid_mainnet", symbol: "SOL", leverage: 1, maxLeverage: 10 },
+    { exchange: "hyperliquid_mainnet", symbol: "XRP", leverage: 1, maxLeverage: 10 },
+    { exchange: "bybit", symbol: "BTC", leverage: 1, maxLeverage: 10 },
+    { exchange: "bybit", symbol: "ETH", leverage: 1, maxLeverage: 10 },
+    { exchange: "bybit", symbol: "BNB", leverage: 1, maxLeverage: 10 },
+    { exchange: "bybit", symbol: "SOL", leverage: 1, maxLeverage: 10 },
+    { exchange: "bybit", symbol: "XRP", leverage: 1, maxLeverage: 10 },
+  ],
+  protection: {
+    maxCapitalAtRiskPct: 0.25,
+    autoStopLossEnabled: true,
+    autoStopLossPct: 0.15,
+    maxLeverage: 10,
+    emergencyWithdrawEnabled: false,
+  },
 };
 
 interface ConfigStore {
@@ -53,6 +79,8 @@ interface ConfigStore {
   updateRisk: (risk: Partial<RiskConfig>) => Promise<void>;
   updateMarket: (symbol: string, updates: Partial<MarketConfig>) => Promise<void>;
   updateTelegram: (telegram: Partial<TelegramConfig>) => Promise<void>;
+  updateLeverage: (leverage: LeverageConfig[]) => Promise<void>;
+  updateProtection: (protection: Partial<ProtectionConfig>) => Promise<void>;
   loadConfig: () => Promise<void>;
   saveConfig: () => Promise<void>;
   resetConfig: () => void;
@@ -102,6 +130,26 @@ export const useConfigStore = create<ConfigStore>()(
           config: {
             ...state.config,
             telegram: { ...state.config.telegram, ...telegram },
+          },
+        }));
+        await get().saveConfig();
+      },
+
+      updateLeverage: async (leverage) => {
+        set((state) => ({
+          config: {
+            ...state.config,
+            leverage,
+          },
+        }));
+        await get().saveConfig();
+      },
+
+      updateProtection: async (protection) => {
+        set((state) => ({
+          config: {
+            ...state.config,
+            protection: { ...state.config.protection, ...protection },
           },
         }));
         await get().saveConfig();

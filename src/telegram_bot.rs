@@ -62,24 +62,60 @@ impl TelegramBot {
         
         info!("📁 Archivo de suscriptores: {:?}", subscribers_file);
         
+        // Cargar usuarios de forma síncrona al iniciar
+        let users = Self::load_users_sync(&subscribers_file);
+        let admin_ids: Vec<String> = users.iter()
+            .filter(|u| u.is_admin)
+            .map(|u| u.chat_id.clone())
+            .collect();
+        
         let bot_instance = Self {
             bot_token: bot_token.to_string(),
             client: Client::new(),
             risk_manager,
             _bot: bot,
             notifier,
-            users: Arc::new(Mutex::new(Vec::new())),
-            admin_ids: Arc::new(Mutex::new(Vec::new())),
+            users: Arc::new(Mutex::new(users)),
+            admin_ids: Arc::new(Mutex::new(admin_ids)),
             subscribers_file,
         };
         
-        // Cargar usuarios desde el archivo al iniciar
-        let bot_instance_clone = bot_instance.clone();
-        tokio::spawn(async move {
-            bot_instance_clone.load_users_from_file().await;
-        });
-        
         bot_instance
+    }
+    
+    fn load_users_sync(file_path: &PathBuf) -> Vec<TelegramUser> {
+        info!("📂 Cargando usuarios desde archivo (sync)...");
+        
+        if let Ok(content) = fs::read_to_string(file_path) {
+            // Intentar parsear como array de objetos (nuevo formato)
+            if let Ok(users) = serde_json::from_str::<Vec<TelegramUser>>(&content) {
+                info!("✅ Cargados {} usuarios desde archivo", users.len());
+                return users;
+            }
+            
+            // Intentar parsear como array de strings (formato antiguo)
+            if let Ok(chat_ids) = serde_json::from_str::<Vec<String>>(&content) {
+                let users: Vec<TelegramUser> = chat_ids.iter().map(|chat_id| {
+                    TelegramUser {
+                        chat_id: chat_id.clone(),
+                        username: format!("user_{}", chat_id),
+                        first_name: "Usuario".to_string(),
+                        subscribed: true,
+                        authorized: true,
+                        last_interaction: Utc::now(),
+                        is_admin: false,
+                    }
+                }).collect();
+                info!("✅ Cargados {} usuarios desde archivo (formato legacy)", users.len());
+                return users;
+            }
+            
+            warn!("⚠️ No se pudo parsear el archivo subscribers.json");
+        } else {
+            info!("📂 Archivo subscribers.json no encontrado");
+        }
+        
+        Vec::new()
     }
     
     // =============================================

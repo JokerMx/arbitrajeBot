@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-hypersdk = "0.2"
 tokio = { version = "1.41", features = ["full", "macros", "rt-multi-thread"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -19,6 +18,7 @@ num-traits = "0.2"
 rand = "0.8"
 reqwest = { version = "0.11", features = ["json"] }
 uuid = { version = "1.10", features = ["v4"] }
+hex = "0.4"
 
 # API
 warp = "0.3"
@@ -26,9 +26,16 @@ futures = "0.3"
 futures-util = "0.3"
 tokio-stream = "0.1"
 
-# Base de datos (CORREGIDO)
+# Base de datos
 sqlx = { version = "0.7", features = ["runtime-tokio-native-tls", "mysql", "chrono", "uuid", "json"] }
-dotenvy = "0.15"
+
+# Hyperliquid SDK (mainnet API + firma EIP-712)
+hypersdk = "0.2"
+either = "1.13"
+
+# Bybit API
+hmac = "0.12"
+sha2 = "0.10"
 
 [profile.release]
 lto = true

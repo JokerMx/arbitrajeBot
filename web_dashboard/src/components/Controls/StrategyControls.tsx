@@ -16,6 +16,10 @@ export const StrategyControls: React.FC = () => {
 
   if (!localStrategy) return null;
 
+  const safeToFixed = (value: number | undefined, decimals: number): string => {
+    return (value ?? 0).toFixed(decimals);
+  };
+
   const handleChange = (field: keyof typeof localStrategy, value: number) => {
     setLocalStrategy({ ...localStrategy, [field]: value });
     setIsEditing(true);
@@ -84,7 +88,7 @@ export const StrategyControls: React.FC = () => {
           />
           <div className="flex justify-between text-xs text-gray-500 mt-1">
             <span>Agresivo</span>
-            <span>{localStrategy.riskAversion.toFixed(2)}</span>
+            <span>{safeToFixed(localStrategy.riskAversion, 2)}</span>
             <span>Conservador</span>
           </div>
         </div>
@@ -106,7 +110,7 @@ export const StrategyControls: React.FC = () => {
           />
           <div className="flex justify-between text-xs text-gray-500 mt-1">
             <span>Bajo</span>
-            <span>{localStrategy.marketImpact.toFixed(3)}</span>
+            <span>{safeToFixed(localStrategy.marketImpact, 3)}</span>
             <span>Alto</span>
           </div>
         </div>
@@ -128,7 +132,7 @@ export const StrategyControls: React.FC = () => {
           />
           <div className="flex justify-between text-xs text-gray-500 mt-1">
             <span>Neutral</span>
-            <span>{localStrategy.inventorySkewStrength.toFixed(1)}</span>
+            <span>{safeToFixed(localStrategy.inventorySkewStrength, 1)}</span>
             <span>Agresivo</span>
           </div>
         </div>

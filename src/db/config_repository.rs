@@ -13,6 +13,10 @@ pub struct ConfigRepository {
     table_prefix: String,
 }
 
+fn read_env_or_default<T: FromStr>(key: &str, default: T) -> T {
+    std::env::var(key).unwrap_or_default().parse().unwrap_or(default)
+}
+
 impl ConfigRepository {
     pub fn new(db: &Database) -> Self {
         Self {
@@ -274,36 +278,56 @@ impl ConfigRepository {
         Ok(())
     }
     
-    /// Obtener todos los mercados - usando String para leer decimales
+    /// Obtener todos los mercados - prioridad .env > BD
     pub async fn get_markets(&self) -> Result<Vec<MarketConfigDB>> {
-        let table = format!("{}markets", self.table_prefix);
+        let _table = format!("{}markets", self.table_prefix);
         
-        let rows = sqlx::query(&format!(
-            r#"SELECT symbol, enabled, CAST(margin_alloc AS CHAR), CAST(min_size AS CHAR), price_decimals, size_decimals 
-               FROM `{}` ORDER BY symbol"#,
-            table
-        ))
-        .fetch_all(&self.pool)
-        .await?;
-        
+        let symbols = vec!["BTC", "ETH", "BNB", "SOL", "XRP"];
         let mut markets = Vec::new();
         
-        for row in rows {
-            let margin_alloc_str: String = row.get(2);
-            let min_size_str: String = row.get(3);
+        // Leer cada símbolo desde .env y sincronizar con BD
+        for symbol in &symbols {
+            let enabled = std::env::var(format!("MARKETS_ENABLED_{}", symbol))
+                .unwrap_or_else(|_| "false".to_string())
+                .parse()
+                .unwrap_or(false);
+            
+            let margin_alloc = Decimal::from_str(
+                &std::env::var(format!("MARKETS_MARGIN_ALLOC_{}", symbol))
+                    .unwrap_or_else(|_| "0.10".to_string())
+            ).unwrap_or(Decimal::new(10, 2));
+            
+            let min_size = Decimal::from_str(
+                &std::env::var(format!("MARKETS_MIN_SIZE_{}", symbol))
+                    .unwrap_or_else(|_| "0.00001".to_string())
+            ).unwrap_or(Decimal::new(1, 5));
+            
+            let price_decimals = match *symbol {
+                "BTC" | "ETH" => 1,
+                "BNB" | "SOL" => 2,
+                _ => 2,
+            };
+            
+            let size_decimals = match *symbol {
+                "BTC" => 8,
+                "ETH" => 6,
+                "BNB" => 5,
+                "SOL" => 4,
+                "XRP" => 2,
+                _ => 8,
+            };
+            
+            // Sincronizar con BD
+            let _ = self.update_market(symbol, Some(enabled), Some(margin_alloc), Some(min_size)).await;
             
             markets.push(MarketConfigDB {
-                symbol: row.get(0),
-                enabled: row.get(1),
-                margin_alloc: Decimal::from_str(&margin_alloc_str)?,
-                min_size: Decimal::from_str(&min_size_str)?,
-                price_decimals: row.get(4),
-                size_decimals: row.get(5),
+                symbol: symbol.to_string(),
+                enabled,
+                margin_alloc,
+                min_size,
+                price_decimals,
+                size_decimals,
             });
-        }
-        
-        if markets.is_empty() {
-            markets = self.create_default_markets().await?;
         }
         
         Ok(markets)
@@ -311,44 +335,65 @@ impl ConfigRepository {
     
     /// Crear mercados por defecto
     async fn create_default_markets(&self) -> Result<Vec<MarketConfigDB>> {
+        let btc_enabled = std::env::var("MARKETS_ENABLED_BTC")
+            .unwrap_or_else(|_| "true".to_string())
+            .parse()
+            .unwrap_or(true);
+        let eth_enabled = std::env::var("MARKETS_ENABLED_ETH")
+            .unwrap_or_else(|_| "false".to_string())
+            .parse()
+            .unwrap_or(false);
+        let bnb_enabled = std::env::var("MARKETS_ENABLED_BNB")
+            .unwrap_or_else(|_| "false".to_string())
+            .parse()
+            .unwrap_or(false);
+        let sol_enabled = std::env::var("MARKETS_ENABLED_SOL")
+            .unwrap_or_else(|_| "false".to_string())
+            .parse()
+            .unwrap_or(false);
+        let xrp_enabled = std::env::var("MARKETS_ENABLED_XRP")
+            .unwrap_or_else(|_| "false".to_string())
+            .parse()
+            .unwrap_or(false);
+
         let default_markets = vec![
             MarketConfigDB { 
                 symbol: "BTC".to_string(), 
-                enabled: true, 
-                margin_alloc: Decimal::new(12, 2),      // 0.12
-                min_size: Decimal::new(1, 5),           // 0.00001
+                enabled: btc_enabled, 
+                margin_alloc: Decimal::from_str(&std::env::var("MARKETS_MARGIN_ALLOC_BTC").unwrap_or_else(|_| "0.10".to_string())).unwrap_or(Decimal::new(10, 2)),
+                min_size: Decimal::from_str(&std::env::var("MARKETS_MIN_SIZE_BTC").unwrap_or_else(|_| "0.00001".to_string())).unwrap_or(Decimal::new(1, 5)),
                 price_decimals: 1, 
                 size_decimals: 8 
             },
             MarketConfigDB { 
                 symbol: "ETH".to_string(), 
-                enabled: true, 
-                margin_alloc: Decimal::new(12, 2),      // 0.12
-                min_size: Decimal::new(1, 4),           // 0.0001
+                enabled: eth_enabled, 
+                margin_alloc: Decimal::from_str(&std::env::var("MARKETS_MARGIN_ALLOC_ETH").unwrap_or_else(|_| "0.10".to_string())).unwrap_or(Decimal::new(10, 2)),
+                min_size: Decimal::from_str(&std::env::var("MARKETS_MIN_SIZE_ETH").unwrap_or_else(|_| "0.0001".to_string())).unwrap_or(Decimal::new(1, 4)),
                 price_decimals: 1, 
                 size_decimals: 6 
             },
             MarketConfigDB { 
                 symbol: "BNB".to_string(), 
-                enabled: true, 
-                margin_alloc: Decimal::new(12, 2),      // 0.12
-                min_size: Decimal::new(1, 3),           // 0.001
+                enabled: bnb_enabled, 
+                margin_alloc: Decimal::from_str(&std::env::var("MARKETS_MARGIN_ALLOC_BNB").unwrap_or_else(|_| "0.10".to_string())).unwrap_or(Decimal::new(10, 2)),
+                min_size: Decimal::from_str(&std::env::var("MARKETS_MIN_SIZE_BNB").unwrap_or_else(|_| "0.001".to_string())).unwrap_or(Decimal::new(1, 3)),
                 price_decimals: 2, 
                 size_decimals: 5 
             },
             MarketConfigDB { 
                 symbol: "SOL".to_string(), 
-                enabled: true, 
-                margin_alloc: Decimal::new(12, 2),      // 0.12
-                min_size: Decimal::new(1, 2),           // 0.01
+                enabled: sol_enabled, 
+                margin_alloc: Decimal::from_str(&std::env::var("MARKETS_MARGIN_ALLOC_SOL").unwrap_or_else(|_| "0.10".to_string())).unwrap_or(Decimal::new(10, 2)),
+                min_size: Decimal::from_str(&std::env::var("MARKETS_MIN_SIZE_SOL").unwrap_or_else(|_| "0.01".to_string())).unwrap_or(Decimal::new(1, 2)),
                 price_decimals: 2, 
                 size_decimals: 4 
             },
             MarketConfigDB { 
                 symbol: "XRP".to_string(), 
-                enabled: true, 
-                margin_alloc: Decimal::new(12, 2),      // 0.12
-                min_size: Decimal::new(5, 1),           // 0.5
+                enabled: xrp_enabled, 
+                margin_alloc: Decimal::from_str(&std::env::var("MARKETS_MARGIN_ALLOC_XRP").unwrap_or_else(|_| "0.10".to_string())).unwrap_or(Decimal::new(10, 2)),
+                min_size: Decimal::from_str(&std::env::var("MARKETS_MIN_SIZE_XRP").unwrap_or_else(|_| "0.5".to_string())).unwrap_or(Decimal::new(5, 1)),
                 price_decimals: 4, 
                 size_decimals: 2 
             },
@@ -379,6 +424,35 @@ impl ConfigRepository {
     /// Actualizar un mercado
     pub async fn update_market(&self, symbol: &str, enabled: Option<bool>, margin_alloc: Option<Decimal>, min_size: Option<Decimal>) -> Result<()> {
         let table = format!("{}markets", self.table_prefix);
+        
+        // Verificar si existe
+        let exists: Vec<_> = sqlx::query(&format!(
+            r#"SELECT symbol FROM `{}` WHERE symbol = ?"#,
+            table
+        ))
+        .bind(symbol)
+        .fetch_all(&self.pool)
+        .await?;
+
+        if exists.is_empty() {
+            // Insertar si no existe
+            let margin_str = margin_alloc.unwrap_or(Decimal::new(10, 2)).to_string();
+            let min_str = min_size.unwrap_or(Decimal::new(1, 5)).to_string();
+            sqlx::query(&format!(
+                r#"INSERT INTO `{}` (symbol, enabled, margin_alloc, min_size, price_decimals, size_decimals) VALUES (?, ?, ?, ?, ?, ?)"#,
+                table
+            ))
+            .bind(symbol)
+            .bind(enabled.unwrap_or(false))
+            .bind(margin_str)
+            .bind(min_str)
+            .bind(1)
+            .bind(8)
+            .execute(&self.pool)
+            .await?;
+            info!("✅ Mercado {} creado", symbol);
+            return Ok(());
+        }
         
         if let Some(enabled_val) = enabled {
             sqlx::query(&format!(
@@ -424,6 +498,9 @@ impl ConfigRepository {
         let markets = self.get_markets().await?;
         let telegram = self.get_or_create_telegram_config().await?;
         let initial_capital = self.get_or_create_initial_capital().await?;
+        let protection = self.get_protection_config().await?;
+        
+        let leverage = self.get_default_leverage_configs().await?;
         
         Ok(FullConfigDB {
             initial_capital,
@@ -431,8 +508,25 @@ impl ConfigRepository {
             risk,
             markets,
             telegram,
+            leverage,
+            protection,
             updated_at: None,
         })
+    }
+    
+    async fn get_default_leverage_configs(&self) -> Result<Vec<LeverageConfigDB>> {
+        let symbols = vec!["BTC", "ETH", "BNB", "SOL", "XRP"];
+        let exchanges = vec!["simulated", "hyperliquid_mainnet", "bybit"];
+        
+        let mut configs = Vec::new();
+        for exchange in exchanges {
+            for symbol in &symbols {
+                let lev = self.get_leverage(exchange, symbol).await?;
+                configs.push(lev);
+            }
+        }
+        
+        Ok(configs)
     }
     
     /// Guardar configuración completa
@@ -451,7 +545,151 @@ impl ConfigRepository {
             ).await?;
         }
         
+        for lev in &config.leverage {
+            self.update_leverage(&lev.exchange, &lev.symbol, lev.leverage, lev.max_leverage).await?;
+        }
+        
+        self.update_protection_config(&config.protection).await?;
+        
         info!("✅ Configuración completa guardada en BD");
+        Ok(())
+    }
+    
+    /// Obtener apalancamiento por símbolo
+    pub async fn get_leverage(&self, exchange: &str, symbol: &str) -> Result<LeverageConfigDB> {
+        let table = format!("{}leverage", self.table_prefix);
+        
+        let env_key = format!("LEVERAGE_{}_{}", exchange.to_uppercase(), symbol.to_uppercase());
+        let env_value = std::env::var(&env_key);
+        
+        let row = sqlx::query(&format!(
+            r#"SELECT CAST(leverage AS CHAR), CAST(max_leverage AS CHAR) FROM `{}` WHERE exchange = ? AND symbol = ?"#,
+            table
+        ))
+        .bind(exchange)
+        .bind(symbol)
+        .fetch_optional(&self.pool)
+        .await?;
+        
+        // Prioridad: .env > BD
+        if let Ok(env_leverage) = env_value {
+            let leverage: i32 = env_leverage.parse().unwrap_or(1);
+            let max_leverage = read_env_or_default("MAX_ALLOWABLE_LEVERAGE", 10);
+            info!("📈 Leverage desde .env: {}={} para {}/{}", env_key, leverage, exchange, symbol);
+            
+            // Guardar en BD si es diferente
+            if let Some(row) = row {
+                let db_leverage: String = row.get(0);
+                if db_leverage.parse::<i32>().unwrap_or(1) != leverage {
+                    let _ = self.update_leverage(exchange, symbol, leverage, max_leverage).await;
+                }
+            }
+            
+            return Ok(LeverageConfigDB {
+                exchange: exchange.to_string(),
+                symbol: symbol.to_string(),
+                leverage,
+                max_leverage,
+            });
+        }
+        
+        if let Some(row) = row {
+            let leverage_str: String = row.get(0);
+            let max_leverage_str: String = row.get(1);
+            
+            Ok(LeverageConfigDB {
+                exchange: exchange.to_string(),
+                symbol: symbol.to_string(),
+                leverage: leverage_str.parse().unwrap_or(1),
+                max_leverage: max_leverage_str.parse().unwrap_or(10),
+            })
+        } else {
+            let leverage = 1;
+            let max_leverage = read_env_or_default("MAX_ALLOWABLE_LEVERAGE", 10);
+            
+            Ok(LeverageConfigDB {
+                exchange: exchange.to_string(),
+                symbol: symbol.to_string(),
+                leverage,
+                max_leverage,
+            })
+        }
+    }
+    
+    /// Actualizar apalancamiento
+    pub async fn update_leverage(&self, exchange: &str, symbol: &str, leverage: i32, max_leverage: i32) -> Result<()> {
+        let table = format!("{}leverage", self.table_prefix);
+        let max_leverage = max_leverage.max(1).min(100);
+        let leverage = leverage.max(1).min(max_leverage);
+        
+        sqlx::query(&format!(
+            r#"INSERT INTO `{}` (exchange, symbol, leverage, max_leverage) VALUES (?, ?, ?, ?)
+               ON DUPLICATE KEY UPDATE leverage = ?, max_leverage = ?"#,
+            table
+        ))
+        .bind(exchange)
+        .bind(symbol)
+        .bind(leverage)
+        .bind(max_leverage)
+        .bind(leverage)
+        .bind(max_leverage)
+        .execute(&self.pool)
+        .await?;
+        
+        info!("✅ Apalancamiento {} {}: {}x", exchange, symbol, leverage);
+        Ok(())
+    }
+    
+    /// Obtener configuración de protección
+    pub async fn get_protection_config(&self) -> Result<ProtectionConfigDB> {
+        let table = format!("{}protection", self.table_prefix);
+        
+        let row = sqlx::query(&format!(
+            r#"SELECT CAST(max_capital_at_risk_pct AS CHAR), auto_stop_loss_enabled, CAST(auto_stop_loss_pct AS CHAR), max_leverage, emergency_withdraw_enabled FROM `{}` WHERE id = 1"#,
+            table
+        ))
+        .fetch_optional(&self.pool)
+        .await?;
+        
+        if let Some(row) = row {
+            let max_capital_str: String = row.get(0);
+            let stop_loss_str: String = row.get(2);
+            
+            Ok(ProtectionConfigDB {
+                max_capital_at_risk_pct: Decimal::from_str(&max_capital_str).unwrap_or(Decimal::new(25, 2)),
+                auto_stop_loss_enabled: row.get(1),
+                auto_stop_loss_pct: Decimal::from_str(&stop_loss_str).unwrap_or(Decimal::new(15, 2)),
+                max_leverage: row.get(3),
+                emergency_withdraw_enabled: row.get(4),
+            })
+        } else {
+            Ok(ProtectionConfigDB::default())
+        }
+    }
+    
+    /// Actualizar configuración de protección
+    pub async fn update_protection_config(&self, config: &ProtectionConfigDB) -> Result<()> {
+        let table = format!("{}protection", self.table_prefix);
+        
+        sqlx::query(&format!(
+            r#"UPDATE `{}` SET 
+                max_capital_at_risk_pct = ?,
+                auto_stop_loss_enabled = ?,
+                auto_stop_loss_pct = ?,
+                max_leverage = ?,
+                emergency_withdraw_enabled = ?
+               WHERE id = 1"#,
+            table
+        ))
+        .bind(config.max_capital_at_risk_pct.to_string())
+        .bind(config.auto_stop_loss_enabled)
+        .bind(config.auto_stop_loss_pct.to_string())
+        .bind(config.max_leverage)
+        .bind(config.emergency_withdraw_enabled)
+        .execute(&self.pool)
+        .await?;
+        
+        info!("✅ Configuración de protección actualizada");
         Ok(())
     }
 }

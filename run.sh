@@ -96,8 +96,36 @@ elif [ "$DASHBOARD_MODE" != "dev" ]; then
     exit 1
 fi
 
-echo -e "${CYAN}🔨 Compilando bot...${NC}"
-cargo build --release
+BINARY_PATH="./target/release/hyperliquid-mmaker-bot"
+
+check_and_build() {
+    if [ -f "$BINARY_PATH" ]; then
+        local binary_time=$(stat -c %Y "$BINARY_PATH" 2>/dev/null)
+        local src_time=0
+        
+        for src in src/*.rs; do
+            if [ -f "$src" ]; then
+                local src_file_time=$(stat -c %Y "$src" 2>/dev/null)
+                if [ "$src_file_time" -gt "$src_time" ]; then
+                    src_time=$src_file_time
+                fi
+            fi
+        done
+        
+        if [ "$binary_time" -ge "$src_time" ]; then
+            echo -e "${CYAN}⏭️  Binario ya compilado: $BINARY_PATH${NC}"
+            return 1
+        fi
+        echo -e "${YELLOW}📜 Código fuente modificado, recompilando...${NC}"
+    fi
+    echo -e "${CYAN}🔨 Compilando bot...${NC}"
+    cargo build --release
+    return 0
+}
+
+if check_and_build; then
+    echo -e "${GREEN}✅ Compilación completada${NC}"
+fi
 
 echo -e "${GREEN}🚀 Iniciando bot en segundo plano...${NC}"
 RUST_LOG=${LOG_LEVEL:-info} PORT=${API_PORT} stdbuf -oL -eL ./target/release/hyperliquid-mmaker-bot \

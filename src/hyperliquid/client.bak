@@ -1,0 +1,123 @@
+//! Cliente real para Hyperliquid usando hypersdk (EIP-712)
+
+use anyhow::{Result, anyhow};
+use rust_decimal::Decimal;
+use rust_decimal::prelude::FromPrimitive;
+use tracing::{info, error};
+use hypersdk::hypercore::{self, types::*, PrivateKeySigner};
+use hypersdk::hypercore::http::Client as HypercoreClient; // Ruta correcta
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use super::models::*;
+
+pub struct HyperliquidClient {
+    client: HypercoreClient,
+    signer: PrivateKeySigner,
+    wallet_address: String,
+    nonce_counter: AtomicU64,
+}
+
+impl HyperliquidClient {
+    pub async fn new(private_key: &str, is_mainnet: bool) -> Result<Self> {
+        let client = if is_mainnet {
+            hypercore::mainnet()
+        } else {
+            hypercore::testnet()
+        };
+
+        let signer: PrivateKeySigner = private_key
+            .parse()
+            .map_err(|e| anyhow!("Error parsing private key: {}", e))?;
+
+        let wallet_address = format!("{:?}", signer.address());
+
+        info!("📍 Wallet address: {}", wallet_address);
+        info!("🌐 Usando Hyperliquid {}", if is_mainnet { "MAINNET" } else { "TESTNET" });
+
+        Ok(Self {
+            client,
+            signer,
+            wallet_address,
+            nonce_counter: AtomicU64::new(chrono::Utc::now().timestamp_millis() as u64),
+        })
+    }
+
+    fn next_nonce(&self) -> u64 {
+        self.nonce_counter.fetch_add(1, Ordering::SeqCst)
+    }
+
+    pub async fn get_balance(&self, asset: &str) -> Result<Decimal> {
+        let state = self.client.exchange().clearinghouse_state().await?;
+        for position in state.asset_positions {
+            if position.position.coin == asset {
+                let size = position.position.szi.parse::<f64>()?;
+                return Ok(Decimal::from_f64(size).unwrap_or(Decimal::ZERO));
+            }
+        }
+        Ok(Decimal::ZERO)
+    }
+
+    pub async fn get_account_state(&self) -> Result<HyperliquidAccountState> {
+        let state = self.client.exchange().clearinghouse_state().await?;
+        let mut balances = HashMap::new();
+        for position in state.asset_positions {
+            let size = position.position.szi.parse::<f64>()?;
+            balances.insert(position.position.coin, Decimal::from_f64(size).unwrap_or(Decimal::ZERO));
+        }
+        Ok(HyperliquidAccountState {
+            balances,
+            wallet_address: self.wallet_address.clone(),
+        })
+    }
+
+    pub async fn place_limit_order(
+        &self,
+        asset_index: u32,
+        side: HyperliquidOrderSide,
+        quantity: Decimal,
+        price: Decimal,
+    ) -> Result<HyperliquidOrderResponse> {
+        let order = OrderRequest {
+            asset: asset_index as usize,
+            is_buy: side == HyperliquidOrderSide::Buy,
+            reduce_only: false,
+            limit_px: price,
+            sz: quantity,
+            order_type: OrderTypePlacement::Limit { tif: TimeInForce::Gtc },
+            cloid: Default::default(),
+        };
+
+        let batch = BatchOrder {
+            orders: vec![order],
+            grouping: OrderGrouping::Na,
+        };
+
+        let nonce = self.next_nonce();
+        // Forzamos el tipo con turbofish para ayudar al compilador
+        let response = self.client
+            .place::<_, _, Vec<OrderResponseStatus>>(&self.signer, batch, nonce, None, None)
+            .await
+            .map_err(|e| anyhow!("Error placing order: {}", e))?;
+
+        let order_id = if let Some(status) = response.first() {
+            match status {
+                OrderResponseStatus::Resting { oid, .. } => oid.to_string(),
+                OrderResponseStatus::Filled { oid, .. } => oid.to_string(),
+                _ => {
+                    error!("Respuesta inesperada: {:?}", status);
+                    return Err(anyhow!("Orden rechazada"));
+                }
+            }
+        } else {
+            return Err(anyhow!("Respuesta vacía del exchange"));
+        };
+
+        info!("✅ Orden colocada. Order ID: {}", order_id);
+        Ok(HyperliquidOrderResponse {
+            success: true,
+            order_id,
+            message: "Orden colocada".to_string(),
+        })
+    }
+}

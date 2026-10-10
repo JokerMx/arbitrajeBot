@@ -8,8 +8,13 @@ import { TradesTable } from "./components/Dashboard/TradesTable";
 import { StrategyControls } from "./components/Controls/StrategyControls";
 import { RiskControls } from "./components/Controls/RiskControls";
 import { MarketControls } from "./components/Controls/MarketControls";
+import { SystemSettings } from "./components/Controls/SystemSettings";
+import { TelegramSettings } from "./components/Controls/TelegramSettings";
+import { LeverageControls } from "./components/Controls/LeverageControls";
+import { ProtectionControls } from "./components/Controls/ProtectionControls";
 import { TelegramUsers } from "./components/Admin/TelegramUsers";
 import { useBotStore } from "./store/botStore";
+import { useConfigStore } from "./store/configStore";
 import { wsService } from "./services/websocket";
 import { backendWsUrl } from "./services/backendConfig";
 
@@ -252,9 +257,13 @@ const RiskView: React.FC = () => {
   console.log("📊 Renderizando RiskView");
   return (
     <div className="space-y-6">
-      <h2 className="text-2xl font-bold">Gestión de Riesgo</h2>
-      <div className="bg-dark-200 rounded-xl p-6 border border-dark-300">
+      <h2 className="text-2xl font-bold">Gestión de Riesgo y Protección</h2>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <RiskControls />
+        <ProtectionControls />
+        <div className="bg-dark-200 rounded-xl p-6 border border-dark-300 lg:col-span-2">
+          <LeverageControls />
+        </div>
       </div>
     </div>
   );
@@ -326,12 +335,12 @@ const SettingsView: React.FC = () => {
     <div className="space-y-6">
       <h2 className="text-2xl font-bold">Configuración General</h2>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-dark-200 rounded-xl p-6 border border-dark-300">
-          <StrategyControls />
-        </div>
-        <div className="bg-dark-200 rounded-xl p-6 border border-dark-300">
-          <RiskControls />
-        </div>
+        <SystemSettings />
+        <TelegramSettings />
+        <StrategyControls />
+        <RiskControls />
+        <LeverageControls />
+        <ProtectionControls />
         <div className="bg-dark-200 rounded-xl p-6 border border-dark-300 lg:col-span-2">
           <MarketControls />
         </div>
@@ -346,50 +355,49 @@ const SettingsView: React.FC = () => {
 
 function App() {
   const { status } = useBotStore();
+  const { loadConfig } = useConfigStore();
   const [fills, setFills] = useState<FillData[]>([]);
   const [currentView, setCurrentView] = useState<string>("dashboard");
 
   useEffect(() => {
-    console.log("🔌 Iniciando conexión WebSocket...");
-    wsService.connect(backendWsUrl);
+    loadConfig();
+  console.log("🔌 Iniciando conexión WebSocket...");
+  wsService.connect();  // Ya no necesita URL
 
-    wsService.subscribe("alert", (data: string) => {
-      console.log("📥 Alerta recibida:", data);
+  wsService.subscribe("alert", (data: string) => {
+    console.log("📥 Alerta recibida:", data);
+    
+    if (data.startsWith("📊 FILL:")) {
+      const parts = data.replace("📊 FILL:", "").split("|");
       
-      if (data.startsWith("📊 FILL:")) {
-        console.log("✅ Es un fill!");
-        const parts = data.replace("📊 FILL:", "").split("|");
+      if (parts.length >= 7) {
+        const [symbol, side, quantityStr, priceStr, pnlStr, timestamp, id] = parts;
         
-        if (parts.length >= 7) {
-          const [symbol, side, quantityStr, priceStr, pnlStr, timestamp, id] = parts;
-          
-          const newFill: FillData = {
-            symbol,
-            side,
-            quantity: parseFloat(quantityStr) || 0,
-            price: parseFloat(priceStr) || 0,
-            pnl: parseFloat(pnlStr) || 0,
-            timestamp: timestamp || new Date().toLocaleTimeString(),
-            id: id || `fill_${Date.now()}`,
-          };
-          
-          console.log("📊 Nuevo fill:", newFill);
-          
-          setFills(prev => {
-            if (prev.some(f => f.id === newFill.id)) {
-              return prev;
-            }
-            return [newFill, ...prev].slice(0, 7);
-          });
-        }
+        const newFill = {
+          symbol,
+          side,
+          quantity: parseFloat(quantityStr) || 0,
+          price: parseFloat(priceStr) || 0,
+          pnl: parseFloat(pnlStr) || 0,
+          timestamp: timestamp || new Date().toLocaleTimeString(),
+          id: id || `fill_${Date.now()}`,
+        };
+        
+        setFills(prev => {
+          if (prev.some(f => f.id === newFill.id)) {
+            return prev;
+          }
+          return [newFill, ...prev].slice(0, 7);
+        });
       }
-    });
+    }
+  });
 
-    return () => {
-      console.log("🔌 Cerrando conexión WebSocket...");
-      wsService.disconnect();
-    };
-  }, []);
+  return () => {
+    console.log("🔌 Cerrando conexión WebSocket...");
+    wsService.disconnect();
+  };
+}, []);
 
   const handleNavigate = (view: string) => {
     console.log("🔄 handleNavigate llamado con:", view);

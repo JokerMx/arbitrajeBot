@@ -1,8 +1,21 @@
 //! Modelos para persistencia
 
-use serde::{Serialize, Deserialize};
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
+use std::str::FromStr;
+
+fn read_env_or_default<T: FromStr>(key: &str, default: T) -> T {
+    std::env::var(key)
+        .unwrap_or_default()
+        .parse()
+        .unwrap_or(default)
+}
+
+fn read_env_decimal(key: &str, default: &str) -> Decimal {
+    Decimal::from_str(&std::env::var(key).unwrap_or_else(|_| default.to_string()))
+        .unwrap_or_else(|_| Decimal::from_str(default).unwrap_or(Decimal::new(1, 1)))
+}
 
 /// Configuración de estrategia
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,13 +32,16 @@ pub struct StrategyConfigDB {
 impl Default for StrategyConfigDB {
     fn default() -> Self {
         Self {
-            base_spread_ticks: 8,
-            risk_aversion: Decimal::new(25, 2),
-            market_impact: Decimal::new(2, 2),
-            inventory_skew_strength: Decimal::new(2, 1),
-            volatility_lookback_minutes: 20,
-            order_refresh_ms: 30000,
-            max_inventory_ratio: Decimal::new(15, 2),
+            base_spread_ticks: read_env_or_default("STRATEGY_BASE_SPREAD_TICKS", 10),
+            risk_aversion: read_env_decimal("STRATEGY_RISK_AVERSION", "0.15"),
+            market_impact: read_env_decimal("STRATEGY_MARKET_IMPACT", "0.01"),
+            inventory_skew_strength: read_env_decimal("STRATEGY_INVENTORY_SKEW_STRENGTH", "0.15"),
+            volatility_lookback_minutes: read_env_or_default(
+                "STRATEGY_VOLATILITY_LOOKBACK_MINUTES",
+                20,
+            ),
+            order_refresh_ms: read_env_or_default("STRATEGY_ORDER_REFRESH_MS", 30000),
+            max_inventory_ratio: read_env_decimal("STRATEGY_MAX_INVENTORY_RATIO", "0.10"),
         }
     }
 }
@@ -33,8 +49,8 @@ impl Default for StrategyConfigDB {
 /// Configuración de riesgo (en porcentajes)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RiskConfigDB {
-    pub max_position_size_pct: Decimal,   // % del capital
-    pub max_daily_loss_pct: Decimal,      // % del capital
+    pub max_position_size_pct: Decimal, // % del capital
+    pub max_daily_loss_pct: Decimal,    // % del capital
     pub max_drawdown_pct: Decimal,
     pub kill_switch_enabled: bool,
     pub circuit_breaker_threshold: Decimal,
@@ -43,11 +59,11 @@ pub struct RiskConfigDB {
 impl Default for RiskConfigDB {
     fn default() -> Self {
         Self {
-            max_position_size_pct: Decimal::new(15, 2),   // 0.15 (15%)
-            max_daily_loss_pct: Decimal::new(30, 2),      // 0.30 (30%)
-            max_drawdown_pct: Decimal::new(20, 2),        // 0.20 (20%)
-            kill_switch_enabled: true,
-            circuit_breaker_threshold: Decimal::new(5, 2), // 0.05 (5%)
+            max_position_size_pct: read_env_decimal("RISK_MAX_POSITION_SIZE_PCT", "0.10"),
+            max_daily_loss_pct: read_env_decimal("RISK_MAX_DAILY_LOSS_PCT", "0.20"),
+            max_drawdown_pct: read_env_decimal("RISK_MAX_DRAWDOWN_PCT", "0.15"),
+            kill_switch_enabled: read_env_or_default("RISK_KILL_SWITCH_ENABLED", true),
+            circuit_breaker_threshold: read_env_decimal("RISK_CIRCUIT_BREAKER_THRESHOLD", "0.03"),
         }
     }
 }
@@ -65,13 +81,18 @@ pub struct TelegramConfigDB {
 
 impl Default for TelegramConfigDB {
     fn default() -> Self {
+        let bot_token = std::env::var("TELEGRAM_BOT_TOKEN").ok();
+        let chat_id = std::env::var("TELEGRAM_CHAT_ID").ok();
+        let enabled = bot_token.as_ref().map(|t| !t.is_empty()).unwrap_or(false)
+            && chat_id.as_ref().map(|c| !c.is_empty()).unwrap_or(false);
+
         Self {
-            enabled: false,
-            bot_token: None,
-            chat_id: None,
-            notify_orders: true,
-            notify_fills: true,
-            notify_status: true,
+            enabled,
+            bot_token,
+            chat_id,
+            notify_orders: read_env_or_default("TELEGRAM_NOTIFY_ORDERS", true),
+            notify_fills: read_env_or_default("TELEGRAM_NOTIFY_FILLS", true),
+            notify_status: read_env_or_default("TELEGRAM_NOTIFY_STATUS", true),
         }
     }
 }
@@ -95,5 +116,49 @@ pub struct FullConfigDB {
     pub risk: RiskConfigDB,
     pub markets: Vec<MarketConfigDB>,
     pub telegram: TelegramConfigDB,
+    pub leverage: Vec<LeverageConfigDB>,
+    pub protection: ProtectionConfigDB,
     pub updated_at: Option<DateTime<Utc>>,
+}
+
+/// Configuración de apalancamiento por símbolo
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LeverageConfigDB {
+    pub exchange: String,
+    pub symbol: String,
+    pub leverage: i32,
+    pub max_leverage: i32,
+}
+
+impl Default for LeverageConfigDB {
+    fn default() -> Self {
+        Self {
+            exchange: "simulated".to_string(),
+            symbol: "BTC".to_string(),
+            leverage: 1,
+            max_leverage: 10,
+        }
+    }
+}
+
+/// Configuración de protección de capital
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProtectionConfigDB {
+    pub max_capital_at_risk_pct: Decimal,
+    pub auto_stop_loss_enabled: bool,
+    pub auto_stop_loss_pct: Decimal,
+    pub max_leverage: i32,
+    pub emergency_withdraw_enabled: bool,
+}
+
+impl Default for ProtectionConfigDB {
+    fn default() -> Self {
+        Self {
+            max_capital_at_risk_pct: read_env_decimal("MAX_CAPITAL_AT_RISK_PCT", "0.25"),
+            auto_stop_loss_enabled: read_env_or_default("AUTO_STOP_LOSS_ENABLED", true),
+            auto_stop_loss_pct: read_env_decimal("AUTO_STOP_LOSS_PCT", "0.15"),
+            max_leverage: read_env_or_default("MAX_ALLOWABLE_LEVERAGE", 10),
+            emergency_withdraw_enabled: false,
+        }
+    }
 }

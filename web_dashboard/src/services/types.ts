@@ -58,8 +58,8 @@ export interface StrategyConfig {
 }
 
 export interface RiskConfig {
-  maxPositionSizeUsd: number;
-  maxDailyLossUsd: number;
+  maxPositionSizePct: number;
+  maxDailyLossPct: number;
   maxDrawdownPct: number;
   killSwitchEnabled: boolean;
   circuitBreakerThreshold: number;
@@ -81,12 +81,29 @@ export interface TelegramConfig {
   notifyStatus: boolean;
 }
 
+export interface LeverageConfig {
+  exchange: string;
+  symbol: string;
+  leverage: number;
+  maxLeverage: number;
+}
+
+export interface ProtectionConfig {
+  maxCapitalAtRiskPct: number;
+  autoStopLossEnabled: boolean;
+  autoStopLossPct: number;
+  maxLeverage: number;
+  emergencyWithdrawEnabled: boolean;
+}
+
 export interface FullConfig {
   strategy: StrategyConfig;
   risk: RiskConfig;
   markets: MarketConfig[];
   telegram: TelegramConfig;
   initialCapital: number;
+  leverage: LeverageConfig[];
+  protection: ProtectionConfig;
 }
 
 export interface WebSocketMessage {

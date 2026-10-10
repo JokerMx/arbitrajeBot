@@ -70,8 +70,8 @@ pub struct StrategyConfigResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RiskConfigResponse {
-    pub max_position_size_pct: f64,      // Ahora es porcentaje
-    pub max_daily_loss_pct: f64,         // Ahora es porcentaje
+    pub max_position_size_pct: f64, // Ahora es porcentaje
+    pub max_daily_loss_pct: f64,    // Ahora es porcentaje
     pub max_drawdown_pct: f64,
     pub kill_switch_enabled: bool,
     pub circuit_breaker_threshold: f64,
@@ -102,6 +102,25 @@ pub struct FullConfigResponse {
     pub markets: Vec<MarketConfigResponse>,
     pub telegram: TelegramConfigResponse,
     pub initial_capital: f64,
+    pub leverage: Vec<LeverageResponse>,
+    pub protection: ProtectionResponse,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LeverageResponse {
+    pub exchange: String,
+    pub symbol: String,
+    pub leverage: i32,
+    pub max_leverage: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProtectionResponse {
+    pub max_capital_at_risk_pct: f64,
+    pub auto_stop_loss_enabled: bool,
+    pub auto_stop_loss_pct: f64,
+    pub max_leverage: i32,
+    pub emergency_withdraw_enabled: bool,
 }
 
 // =============================================
@@ -121,8 +140,8 @@ pub struct UpdateStrategyRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateRiskRequest {
-    pub max_position_size_pct: Option<f64>,   // Ahora es porcentaje
-    pub max_daily_loss_pct: Option<f64>,      // Ahora es porcentaje
+    pub max_position_size_pct: Option<f64>, // Ahora es porcentaje
+    pub max_daily_loss_pct: Option<f64>,    // Ahora es porcentaje
     pub max_drawdown_pct: Option<f64>,
     pub kill_switch_enabled: Option<bool>,
     pub circuit_breaker_threshold: Option<f64>,
@@ -152,6 +171,24 @@ pub struct FullConfigUpdate {
     pub risk: Option<UpdateRiskRequest>,
     pub markets: Option<Vec<UpdateMarketRequest>>,
     pub telegram: Option<UpdateTelegramRequest>,
+    pub leverage: Option<Vec<UpdateLeverageRequest>>,
+    pub protection: Option<UpdateProtectionRequest>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct UpdateLeverageRequest {
+    pub exchange: String,
+    pub symbol: String,
+    pub leverage: i32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateProtectionRequest {
+    pub max_capital_at_risk_pct: Option<f64>,
+    pub auto_stop_loss_enabled: Option<bool>,
+    pub auto_stop_loss_pct: Option<f64>,
+    pub max_leverage: Option<i32>,
+    pub emergency_withdraw_enabled: Option<bool>,
 }
 
 // =============================================

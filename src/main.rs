@@ -1,5 +1,4 @@
-//! Hyperliquid Market Making Bot - PRODUCCIÓN MAINNET
-//! Con persistencia en MariaDB y límites proporcionales al capital
+//! Hyperliquid Market Making Bot - PRODUCCIÓN MAINNET (API REST + firma)
 
 use dotenv::dotenv;
 use std::env;
@@ -21,67 +20,58 @@ mod notifier;
 mod api;
 mod telegram_bot;
 mod db;
+mod hyperliquid;
+mod bybit;
 
 use crate::bot::{TradingBot, BotConfig};
 use crate::types::{MarketConfig, StrategyConfig, RiskConfig};
 use crate::api::api_routes;
 use crate::telegram_bot::TelegramBot;
 use crate::db::{Database, ConfigRepository};
+use crate::executor::ExchangeType;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenv().ok();
-    
+
     tracing_subscriber::fmt()
-        .with_env_filter(
-            env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string())
-        )
+        .with_env_filter(env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()))
         .init();
-    
+
     info!("================================================");
     info!("  Hyperliquid Market Making Bot v0.1.0");
-    info!("  PRODUCCIÓN - MAINNET");
+    info!("  PRODUCCIÓN - MAINNET (API REST + FIRMA)");
     info!("================================================");
-    
+
     // =============================================
     // INICIALIZAR BASE DE DATOS
     // =============================================
-    
     info!("🗄️ Conectando a MariaDB...");
     let db = Database::new().await?;
     db.init_tables().await?;
-    
     if !db.health_check().await {
         error!("❌ No se pudo conectar a la base de datos");
     }
-    
     let config_repo = ConfigRepository::new(&db);
-    
+
     // =============================================
     // CARGAR CONFIGURACIÓN DESDE BD
     // =============================================
-    
     info!("📦 Cargando configuración desde base de datos...");
     let full_config = config_repo.get_full_config().await?;
-    
     info!("💰 Capital inicial: ${:.2}", full_config.initial_capital);
-    
+
     // =============================================
     // CARGAR CONFIGURACIÓN DE .ENV
     // =============================================
-    
-    let private_key = env::var("PRIVATE_KEY")
-        .expect("PRIVATE_KEY must be set in .env");
-    let wallet = env::var("WALLET")
-        .unwrap_or_else(|_| "".to_string());
-    let network = env::var("NETWORK")
-        .unwrap_or_else(|_| "mainnet".to_string());
+    let private_key = env::var("PRIVATE_KEY").expect("PRIVATE_KEY must be set");
+    let wallet = env::var("WALLET").unwrap_or_default();
+    let network = env::var("NETWORK").unwrap_or_else(|_| "mainnet".to_string());
     let log_level = env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
-    
+
     // =============================================
     // CONVERTIR CONFIGURACIÓN DE BD A TIPOS DEL SISTEMA
     // =============================================
-    
     let strategy_config = StrategyConfig {
         name: "AvellanedaStoikov".to_string(),
         base_spread_ticks: full_config.strategy.base_spread_ticks as u32,
@@ -92,7 +82,7 @@ async fn main() -> anyhow::Result<()> {
         order_refresh_time_ms: full_config.strategy.order_refresh_ms as u64,
         max_inventory_ratio: full_config.strategy.max_inventory_ratio.to_f64().unwrap_or(0.10),
     };
-    
+
     let risk_config = RiskConfig {
         max_position_size_pct: full_config.risk.max_position_size_pct.to_f64().unwrap_or(0.10),
         max_daily_loss_pct: full_config.risk.max_daily_loss_pct.to_f64().unwrap_or(0.20),
@@ -100,83 +90,101 @@ async fn main() -> anyhow::Result<()> {
         kill_switch_enabled: full_config.risk.kill_switch_enabled,
         circuit_breaker_threshold: full_config.risk.circuit_breaker_threshold.to_f64().unwrap_or(0.03),
     };
-    
+
     let initial_capital = full_config.initial_capital;
-    
+
+    // Construir lista de mercados (solo los habilitados)
     let mut market_configs = Vec::new();
     for market in full_config.markets {
         if !market.enabled {
             continue;
         }
+        let margin = market.margin_alloc.to_f64().unwrap_or(0.10);
+        let min_s = market.min_size.to_f64().unwrap_or(0.00001);
         market_configs.push(MarketConfig {
             symbol: market.symbol.clone(),
+            asset_index: 0,
             enabled: market.enabled,
-            margin_alloc: market.margin_alloc.to_f64().unwrap_or(0.10),
-            min_size: market.min_size.to_f64().unwrap_or(0.00001),
+            margin_alloc: if margin.is_finite() && margin > 0.0 { margin } else { 0.10 },
+            min_size: if min_s.is_finite() && min_s > 0.0 { min_s } else { 0.00001 },
             price_decimals: market.price_decimals as u32,
             size_decimals: market.size_decimals as u32,
         });
     }
-    
+
     // =============================================
-    // CONFIGURACIÓN DE TELEGRAM DESDE BD
+    // CONFIGURACIÓN DE TELEGRAM
     // =============================================
-    
     let telegram_token = full_config.telegram.bot_token.clone().unwrap_or_default();
     let telegram_chat_id = full_config.telegram.chat_id.clone().unwrap_or_default();
     let telegram_notify_orders = full_config.telegram.notify_orders;
     let telegram_notify_fills = full_config.telegram.notify_fills;
     let telegram_notify_status = full_config.telegram.notify_status;
-    
+
     // =============================================
-    // CONFIGURACIÓN DEL EXCHANGE - PRODUCCIÓN MAINNET
+    // TIPO DE EXCHANGE (MAINNET, BYBIT o SIMULADO)
     // =============================================
-    
-    let exchange_type_str = env::var("EXCHANGE_TYPE").unwrap_or_else(|_| "hyperliquid_mainnet".to_string());
+    let exchange_type_str = env::var("EXCHANGE_TYPE").unwrap_or_else(|_| "simulated".to_string());
     let exchange_type = match exchange_type_str.as_str() {
-        "hyperliquid_mainnet" => executor::ExchangeType::HyperliquidMainnet,
-        "hyperliquid_testnet" => executor::ExchangeType::HyperliquidTestnet,
-        "simulated" => executor::ExchangeType::Simulated,
-        _ => executor::ExchangeType::HyperliquidMainnet,
+        "hyperliquid_mainnet" => ExchangeType::HyperliquidMainnet,
+        "bybit" => ExchangeType::Bybit,
+        _ => ExchangeType::Simulated,
     };
-    
     info!("🔄 Modo de exchange: {}", exchange_type_str);
+
+    // =============================================
+    // CREDENCIALES DE BYBIT
+    // =============================================
+    let bybit_api_key = env::var("BYBIT_API_KEY").ok();
+    let bybit_api_secret = env::var("BYBIT_API_SECRET").ok();
+    let bybit_testnet = env::var("BYBIT_TESTNET")
+        .unwrap_or_else(|_| "false".to_string())
+        .parse::<bool>()
+        .unwrap_or(false);
     
+    if bybit_testnet {
+        info!("🧪 BYBIT TESTNET ACTIVADO");
+    }
+
     // =============================================
     // CONFIGURACIÓN DEL BOT
     // =============================================
-    
-    let bot_config = BotConfig::new(
-        private_key.clone(),
-        wallet,
-        network.clone(),
-        log_level,
-    );
-    
-    // Calcular límites en USD para mostrar
-    let max_position_usd = initial_capital * Decimal::from_f64(risk_config.max_position_size_pct).unwrap_or(dec!(0.10));
-    let max_daily_loss_usd = initial_capital * Decimal::from_f64(risk_config.max_daily_loss_pct).unwrap_or(dec!(0.20));
-    
+    let bot_config = BotConfig::new(private_key.clone(), wallet, network.clone(), log_level);
+
+    let max_position_usd = initial_capital
+        * Decimal::from_f64(risk_config.max_position_size_pct).unwrap_or(dec!(0.10));
+    let max_daily_loss_usd = initial_capital
+        * Decimal::from_f64(risk_config.max_daily_loss_pct).unwrap_or(dec!(0.20));
+
     info!("💰 Capital inicial: ${:.2}", initial_capital);
-    info!("📊 Límite por posición: ${:.2} ({}% del capital)", max_position_usd, risk_config.max_position_size_pct * 100.0);
-    info!("📉 Límite pérdida diaria: ${:.2} ({}% del capital)", max_daily_loss_usd, risk_config.max_daily_loss_pct * 100.0);
+    info!(
+        "📊 Límite por posición: ${:.2} ({}% del capital)",
+        max_position_usd,
+        risk_config.max_position_size_pct * 100.0
+    );
+    info!(
+        "📉 Límite pérdida diaria: ${:.2} ({}% del capital)",
+        max_daily_loss_usd,
+        risk_config.max_daily_loss_pct * 100.0
+    );
     info!("📉 Drawdown máximo: {}%", risk_config.max_drawdown_pct * 100.0);
     info!("🎯 Spread base: {} ticks", strategy_config.base_spread_ticks);
     info!("🌐 Red: {}", network);
     info!("🗄️ Persistencia: MariaDB con prefijo '{}'", db.config.table_prefix);
-    
-    if let executor::ExchangeType::HyperliquidMainnet = exchange_type {
+    let exchange_type_str = env::var("EXCHANGE_TYPE").unwrap_or_else(|_| "simulated".to_string());
+    println!("🔧 EXCHANGE_TYPE leído: '{}'", exchange_type_str);
+    info!("🔄 Modo de exchange: {}", exchange_type_str);
+    if let ExchangeType::HyperliquidMainnet = exchange_type {
         info!("⚠️ ⚠️ ⚠️ IMPORTANTE ⚠️ ⚠️ ⚠️");
         info!("   ESTÁS OPERANDO EN MAINNET CON DINERO REAL");
         info!("   Capital: ${:.2} USDC", initial_capital);
         info!("   Riesgo máximo por operación: ${:.2}", max_position_usd);
         info!("⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️");
     }
-    
+
     // =============================================
-    // INICIALIZAR NOTIFICADOR DE TELEGRAM
+    // NOTIFICADOR TELEGRAM
     // =============================================
-    
     let notifier = Arc::new(notifier::TelegramNotifier::new_with_config(
         &telegram_token,
         &telegram_chat_id,
@@ -184,41 +192,52 @@ async fn main() -> anyhow::Result<()> {
         telegram_notify_fills,
         telegram_notify_status,
     ));
-    
-    // Enviar notificación de inicio
+
     if notifier.is_enabled().await {
         let start_msg = format!(
-            "🚀 *BOT INICIADO EN MAINNET*\n\n\
-             💰 Capital: ${:.2}\n\
-             📊 Límite posición: ${:.2}\n\
-             🎯 Spread: {} ticks\n\
-             ⚠️ Monitorear constantemente",
+            "🚀 *BOT INICIADO EN MAINNET*\n\n💰 Capital: ${:.2}\n📊 Límite posición: ${:.2}\n🎯 Spread: {} ticks\n⚠️ Monitorear constantemente",
             initial_capital, max_position_usd, strategy_config.base_spread_ticks
         );
         let _ = notifier.send_message(&start_msg).await;
     }
-    
+
     // =============================================
-    // CREAR UNA ÚNICA INSTANCIA DE RISK MANAGER
+    // RISK MANAGER
     // =============================================
-    
     info!("📊 Creando RiskManager UNIFICADO...");
-    let risk_manager = Arc::new(Mutex::new(risk::RiskManager::new(
+    let mut risk_manager_instance = risk::RiskManager::new(
         risk_config.clone(),
         initial_capital,
-    )));
+    );
     
+    risk_manager_instance.set_protection(full_config.protection.clone());
+    
+    for lev in &full_config.leverage {
+        risk_manager_instance.set_leverage(&lev.exchange, &lev.symbol, lev.leverage);
+    }
+    
+    let risk_manager = Arc::new(Mutex::new(risk_manager_instance));
+
     // =============================================
-    // INICIALIZAR BOT CON EL MISMO RISK MANAGER
+    // EJECUTOR (con API REST + firma)
     // =============================================
-    
-    let is_testnet = network == "testnet";
-    let executor = Arc::new(executor::OrderExecutor::new(
-        &bot_config.private_key,
-        is_testnet,
-        exchange_type,
-    ).await?);
-    
+    let executor = Arc::new(executor::OrderExecutor::new(&private_key, exchange_type, bybit_api_key.as_deref(), bybit_api_secret.as_deref(), bybit_testnet).await?);
+
+    // Si es mainnet, obtener asset_index de los mercados reales
+    if matches!(exchange_type, executor::ExchangeType::HyperliquidMainnet) {
+        for market in &mut market_configs {
+            if let Some(asset_idx) = executor.get_asset_index(&market.symbol) {
+                market.asset_index = asset_idx;
+                info!("✅ {} tiene asset_index: {}", market.symbol, asset_idx);
+            } else {
+                warn!("⚠️ No se encontró mercado real para {}", market.symbol);
+            }
+        }
+    }
+
+    // =============================================
+    // TRADING BOT
+    // =============================================
     info!("🤖 Creando TradingBot...");
     let bot = TradingBot::new(
         bot_config,
@@ -228,51 +247,58 @@ async fn main() -> anyhow::Result<()> {
         initial_capital,
         notifier.clone(),
         risk_manager.clone(),
-    ).await?;
-    
+        exchange_type,
+    )
+    .await?;
     let bot = Arc::new(Mutex::new(bot));
-    
+
     // =============================================
-    // INICIAR TELEGRAM BOT (si hay token)
+    // TELEGRAM BOT
     // =============================================
-    
     let telegram_bot_option: Option<Arc<TelegramBot>> = if !telegram_token.is_empty() {
         info!("🤖 Iniciando Telegram Bot...");
-        let telegram_bot = Arc::new(TelegramBot::new(
+        let tg_bot = Arc::new(TelegramBot::new(
             &telegram_token,
             risk_manager.clone(),
             bot.clone(),
             notifier.clone(),
         ));
-        
         if !telegram_chat_id.is_empty() {
-            telegram_bot.add_admin(&telegram_chat_id).await;
+            tg_bot.add_admin(&telegram_chat_id).await;
             info!("👑 Administrador añadido: {}", telegram_chat_id);
         }
-        
-        let telegram_bot_clone = telegram_bot.clone();
+        let tg_bot_clone = tg_bot.clone();
         tokio::spawn(async move {
-            telegram_bot_clone.run().await;
+            tg_bot_clone.run().await;
         });
-        
         info!("✅ Telegram Bot iniciado correctamente");
-        Some(telegram_bot)
+        Some(tg_bot)
     } else {
         warn!("⚠️ TELEGRAM_BOT_TOKEN no configurado");
         None
     };
-    
+
     // =============================================
-    // INICIAR SERVIDOR API
+    // API SERVER
     // =============================================
-    
     let strategy_config_arc = Arc::new(Mutex::new(strategy_config));
     let risk_config_arc = Arc::new(Mutex::new(risk_config));
     let market_configs_arc = Arc::new(Mutex::new(market_configs));
-    let config_repo_arc = Some(Arc::new(config_repo));
-    let bot_start_time = std::time::Instant::now();
-    
+
     info!("🌐 Iniciando servidor API REST y WebSocket...");
+    let config_repo_arc = Arc::new(config_repo);
+    
+    let exchange_type_arc = Arc::new(Mutex::new(exchange_type_str.clone()));
+    let leverage_configs = Arc::new(Mutex::new({
+        let mut map = std::collections::HashMap::new();
+        for lev in &full_config.leverage {
+            let key = format!("{}_{}", lev.exchange, lev.symbol);
+            map.insert(key, lev.leverage);
+        }
+        map
+    }));
+    let protection_arc = Arc::new(Mutex::new(full_config.protection.clone()));
+    let telegram_arc = Arc::new(Mutex::new(full_config.telegram.clone()));
     
     let api_routes = api_routes(
         bot.clone(),
@@ -283,23 +309,27 @@ async fn main() -> anyhow::Result<()> {
         notifier.clone(),
         telegram_bot_option,
         config_repo_arc,
-        bot_start_time,
+        exchange_type_str.clone(),
+        full_config.protection.clone(),
+        leverage_configs,
+        protection_arc,
+        telegram_arc,
     );
-    
+
     let port = 3001;
     info!("🚀 Servidor API iniciado en http://localhost:{}", port);
     info!("📊 Dashboard disponible en http://localhost:{}/dashboard", port);
     info!("📡 WebSocket disponible en ws://localhost:{}/ws", port);
     info!("📱 API Telegram en http://localhost:{}/api/telegram", port);
     info!("🗄️ Base de datos: MariaDB en {}", db.config.url);
-    
-    if let executor::ExchangeType::HyperliquidMainnet = exchange_type {
+
+    if let ExchangeType::HyperliquidMainnet = exchange_type {
         info!("💹 OPERANDO EN MAINNET CON DINERO REAL");
         info!("   Monitorear en: http://localhost:{}/dashboard", port);
     }
-    
+
     let bot_clone_for_run = bot.clone();
-    
+
     tokio::select! {
         result = async {
             let bot_guard = bot_clone_for_run.lock().await;
@@ -307,8 +337,6 @@ async fn main() -> anyhow::Result<()> {
         } => {
             if let Err(e) = result {
                 error!("❌ Error en el bot: {}", e);
-                
-                // Notificar error por Telegram
                 if notifier.is_enabled().await {
                     let _ = notifier.send_message(&format!("🚨 *ERROR CRÍTICO*\n\n{}", e)).await;
                 }
@@ -318,13 +346,11 @@ async fn main() -> anyhow::Result<()> {
             info!("🛑 Servidor API detenido");
         }
     }
-    
+
     info!("👋 Bot finalizado");
-    
-    // Notificar parada
     if notifier.is_enabled().await {
         let _ = notifier.send_message("🛑 Bot detenido correctamente").await;
     }
-    
+
     Ok(())
 }
