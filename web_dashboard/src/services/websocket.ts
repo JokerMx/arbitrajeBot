@@ -2,8 +2,9 @@ import { useBotStore } from "../store/botStore";
 import { WebSocketMessage } from "./types";
 import toast from "react-hot-toast";
 
-// Usar la URL absoluta
-const WS_URL = 'ws://localhost:3001/ws';
+import { backendWsUrl } from "./backendConfig";
+
+const WS_URL = backendWsUrl;
 
 class WebSocketService {
   private ws: WebSocket | null = null;

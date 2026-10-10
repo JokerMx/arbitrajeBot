@@ -13,9 +13,20 @@ import {
   X,
   Loader2,
   AlertCircle,
+  Crown,
+  Star,
+  TrendingUp,
+  Gift,
 } from 'lucide-react';
 import { telegramApi } from '../../services/telegramAdminApi';
-import { TelegramUser, TelegramStats, TelegramCommand } from '../../types/telegram';
+import {
+  TelegramUser,
+  TelegramStats,
+  TelegramCommand,
+  PaymentRecord,
+  SignalPerformance,
+  BroadcastSegment,
+} from '../../types/telegram';
 import { UserDetailModal } from './UserDetailModal';
 import toast from 'react-hot-toast';
 
@@ -24,7 +35,10 @@ export const TelegramUsers: React.FC = () => {
   const [stats, setStats] = useState<TelegramStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [filter, setFilter] = useState<'all' | 'authorized' | 'unauthorized' | 'subscribed'>('all');
+  const [filter, setFilter] = useState<'all' | 'authorized' | 'unauthorized' | 'subscribed' | 'premium'>('all');
+  const [payments, setPayments] = useState<PaymentRecord[]>([]);
+  const [performance, setPerformance] = useState<SignalPerformance | null>(null);
+  const [segment, setSegment] = useState<BroadcastSegment>('all');
   const [selectedUser, setSelectedUser] = useState<TelegramUser | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [broadcastMessage, setBroadcastMessage] = useState('');
@@ -49,6 +63,9 @@ export const TelegramUsers: React.FC = () => {
       setUsers(usersData);
       setStats(statsData);
       setCommands(commandsData);
+      // Datos de monetización: si fallan no bloquean la vista
+      telegramApi.getPayments().then(setPayments).catch(() => setPayments([]));
+      telegramApi.getPerformance().then(setPerformance).catch(() => setPerformance(null));
     } catch (error) {
       console.error('❌ Error cargando datos:', error);
       setError('Error al cargar los datos. Por favor, intenta de nuevo.');
@@ -81,6 +98,8 @@ export const TelegramUsers: React.FC = () => {
         return !user.authorized;
       case 'subscribed':
         return user.subscribed;
+      case 'premium':
+        return !!user.is_premium;
       default:
         return true;
     }
@@ -149,6 +168,30 @@ export const TelegramUsers: React.FC = () => {
     }
   };
 
+  const handleGrant = async (chatId: string) => {
+    const input = window.prompt('¿Cuántos días de Premium regalar?', '30');
+    const days = Number(input);
+    if (!input || !Number.isFinite(days) || days <= 0) return;
+    try {
+      const result = await telegramApi.grantPremium(chatId, Math.round(days));
+      result.success ? toast.success(result.message) : toast.error(result.message);
+      loadData();
+    } catch {
+      toast.error('Error al dar Premium');
+    }
+  };
+
+  const handleRevoke = async (chatId: string) => {
+    if (!window.confirm('¿Quitar Premium a este usuario? (no reembolsa el pago)')) return;
+    try {
+      const result = await telegramApi.revokePremium(chatId);
+      result.success ? toast.success(result.message) : toast.error(result.message);
+      loadData();
+    } catch {
+      toast.error('Error al quitar Premium');
+    }
+  };
+
   const handleBroadcast = async () => {
     if (!broadcastMessage.trim()) {
       toast.error('El mensaje no puede estar vacío');
@@ -157,7 +200,7 @@ export const TelegramUsers: React.FC = () => {
 
     setSendingBroadcast(true);
     try {
-      const result = await telegramApi.sendBroadcast(broadcastMessage);
+      const result = await telegramApi.sendBroadcast(broadcastMessage, segment);
       if (result.success) {
         toast.success(`Mensaje enviado a ${result.sent} usuarios`);
         setBroadcastMessage('');
@@ -246,6 +289,69 @@ export const TelegramUsers: React.FC = () => {
         </div>
       </div>
 
+      {/* Monetización */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="bg-dark-200 rounded-xl p-6 border border-dark-300">
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-warning/10 rounded-lg">
+              <Crown className="w-6 h-6 text-warning" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-400">Premium activos</p>
+              <p className="text-2xl font-bold">{stats?.premium_users || 0}</p>
+              <p className="text-xs text-gray-500">pagando: {stats?.paying_users || 0}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-dark-200 rounded-xl p-6 border border-dark-300">
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-success/10 rounded-lg">
+              <Star className="w-6 h-6 text-success" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-400">Ingresos 30 días</p>
+              <p className="text-2xl font-bold">{stats?.revenue_stars_30d || 0} ⭐</p>
+              <p className="text-xs text-gray-500">total: {stats?.revenue_stars_total || 0} ⭐</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-dark-200 rounded-xl p-6 border border-dark-300">
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-primary-500/10 rounded-lg">
+              <Users className="w-6 h-6 text-primary-500" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-400">Nuevos 7 días</p>
+              <p className="text-2xl font-bold">{stats?.new_users_7d || 0}</p>
+              <p className="text-xs text-gray-500">bloquearon: {stats?.blocked_users || 0}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-dark-200 rounded-xl p-6 border border-dark-300">
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-info/10 rounded-lg">
+              <TrendingUp className="w-6 h-6 text-info" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-400">Señales cerradas</p>
+              <p className="text-2xl font-bold">
+                {performance ? `${performance.total_r >= 0 ? '+' : ''}${performance.total_r.toFixed(1)}R` : '—'}
+              </p>
+              <p className="text-xs text-gray-500">
+                {performance
+                  ? `${performance.closed} cerradas · ${(performance.win_rate * 100).toFixed(0)}% aciertos${
+                      performance.includes_paper ? ' · incluye papel' : ''
+                    }`
+                  : 'sin datos'}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Broadcast Section */}
       <div className="bg-dark-200 rounded-xl p-6 border border-dark-300">
         <h3 className="text-lg font-semibold mb-4">Enviar Broadcast</h3>
@@ -254,10 +360,20 @@ export const TelegramUsers: React.FC = () => {
             type="text"
             value={broadcastMessage}
             onChange={(e) => setBroadcastMessage(e.target.value)}
-            placeholder="Escribe un mensaje para enviar a todos los usuarios suscritos..."
+            placeholder="Mensaje (admite HTML de Telegram: <b>, <i>, <a href>)..."
             className="flex-1 bg-dark-300 border border-dark-400 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
             disabled={sendingBroadcast}
           />
+          <select
+            value={segment}
+            onChange={(e) => setSegment(e.target.value as BroadcastSegment)}
+            className="bg-dark-300 border border-dark-400 rounded-lg px-3 py-2 text-sm"
+            disabled={sendingBroadcast}
+          >
+            <option value="all">Todos los suscritos</option>
+            <option value="free">Solo Free</option>
+            <option value="premium">Solo Premium</option>
+          </select>
           <button
             onClick={handleBroadcast}
             disabled={sendingBroadcast || !broadcastMessage.trim()}
@@ -316,6 +432,16 @@ export const TelegramUsers: React.FC = () => {
           >
             Suscritos ({users.filter(u => u.subscribed).length})
           </button>
+          <button
+            onClick={() => setFilter('premium')}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              filter === 'premium'
+                ? 'bg-warning text-white'
+                : 'bg-dark-300 text-gray-400 hover:bg-dark-400'
+            }`}
+          >
+            Premium ({users.filter(u => u.is_premium).length})
+          </button>
         </div>
 
         <div className="flex gap-2">
@@ -349,6 +475,7 @@ export const TelegramUsers: React.FC = () => {
                 <th className="px-6 py-4">Chat ID</th>
                 <th className="px-6 py-4">Estado</th>
                 <th className="px-6 py-4">Suscripción</th>
+                <th className="px-6 py-4">Plan</th>
                 <th className="px-6 py-4">Última interacción</th>
                 <th className="px-6 py-4">Acciones</th>
               </tr>
@@ -356,7 +483,7 @@ export const TelegramUsers: React.FC = () => {
             <tbody className="divide-y divide-dark-300">
               {filteredUsers.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-8 text-center text-gray-400">
+                  <td colSpan={7} className="px-6 py-8 text-center text-gray-400">
                     No hay usuarios que coincidan con los filtros
                   </td>
                 </tr>
@@ -396,10 +523,40 @@ export const TelegramUsers: React.FC = () => {
                         </span>
                       )}
                     </td>
+                    <td className="px-6 py-4 text-sm">
+                      {user.is_premium ? (
+                        <span className="flex items-center gap-1 text-warning">
+                          <Crown className="w-4 h-4" />
+                          hasta {user.premium_until ? new Date(user.premium_until).toLocaleDateString() : '—'}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">Free{user.trial_used ? ' (prueba usada)' : ''}</span>
+                      )}
+                      {user.blocked && <span className="block text-xs text-danger">bloqueó el bot</span>}
+                      {!!user.total_paid_stars && (
+                        <span className="block text-xs text-gray-500">pagado: {user.total_paid_stars} ⭐</span>
+                      )}
+                    </td>
                     <td className="px-6 py-4 text-sm text-gray-400">
                       {new Date(user.last_interaction).toLocaleString()}
                     </td>
-                    <td className="px-6 py-4">
+                    <td className="px-6 py-4 flex gap-1">
+                      <button
+                        onClick={() => handleGrant(user.chat_id)}
+                        className="p-2 hover:bg-dark-300 rounded-lg transition-colors text-warning"
+                        title="Regalar días Premium"
+                      >
+                        <Gift className="w-4 h-4" />
+                      </button>
+                      {user.is_premium && (
+                        <button
+                          onClick={() => handleRevoke(user.chat_id)}
+                          className="p-2 hover:bg-dark-300 rounded-lg transition-colors text-danger"
+                          title="Quitar Premium"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
                       <button
                         onClick={() => {
                           setSelectedUser(user);
@@ -419,6 +576,43 @@ export const TelegramUsers: React.FC = () => {
         </div>
       </div>
 
+      {/* Pagos */}
+      <div className="bg-dark-200 rounded-xl p-6 border border-dark-300">
+        <h3 className="text-lg font-semibold mb-4">Pagos (Telegram Stars)</h3>
+        {payments.length === 0 ? (
+          <p className="text-sm text-gray-400">Aún no hay pagos.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-gray-400">
+                  <th className="py-2 pr-4">Fecha</th>
+                  <th className="py-2 pr-4">Usuario</th>
+                  <th className="py-2 pr-4">Stars</th>
+                  <th className="py-2 pr-4">Tipo</th>
+                  <th className="py-2 pr-4">Premium hasta</th>
+                  <th className="py-2 pr-4">Charge ID (para /refund)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-dark-300">
+                {payments.slice(0, 50).map((p) => (
+                  <tr key={p.charge_id || p.at}>
+                    <td className="py-2 pr-4">{new Date(p.at).toLocaleString()}</td>
+                    <td className="py-2 pr-4 font-mono">{p.chat_id}</td>
+                    <td className="py-2 pr-4">{p.stars} ⭐</td>
+                    <td className="py-2 pr-4">{p.recurring ? 'Renovación' : 'Nuevo'}</td>
+                    <td className="py-2 pr-4">
+                      {p.premium_until ? new Date(p.premium_until).toLocaleDateString() : '—'}
+                    </td>
+                    <td className="py-2 pr-4 font-mono text-xs text-gray-400 break-all">{p.charge_id}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       {/* Comandos disponibles */}
       <div className="bg-dark-200 rounded-xl p-6 border border-dark-300">
         <h3 className="text-lg font-semibold mb-4">Comandos de Telegram</h3>
@@ -432,6 +626,7 @@ export const TelegramUsers: React.FC = () => {
                 <span className={`text-xs px-2 py-1 rounded-full ${
                   cmd.access === 'admin' ? 'bg-danger/20 text-danger' :
                   cmd.access === 'authorized' ? 'bg-success/20 text-success' :
+                  cmd.access === 'premium' ? 'bg-warning/20 text-warning' :
                   'bg-primary-500/20 text-primary-500'
                 }`}>
                   {cmd.access}

@@ -1,8 +1,15 @@
 import axios from 'axios';
-import { TelegramUser, TelegramStats, TelegramCommand } from '../types/telegram';
+import {
+  TelegramUser,
+  TelegramStats,
+  TelegramCommand,
+  PaymentRecord,
+  SignalPerformance,
+  BroadcastSegment,
+} from '../types/telegram';
+import { backendApiBaseUrl } from './backendConfig';
 
-// Usar la URL absoluta en lugar de relativa
-const API_BASE = 'http://localhost:3001/api';
+const API_BASE = backendApiBaseUrl;
 
 class TelegramAdminApi {
   private async request<T>(
@@ -57,8 +64,28 @@ class TelegramAdminApi {
     return this.request('delete', `/users/${chatId}`);
   }
 
-  async sendBroadcast(message: string): Promise<{ success: boolean; message: string; sent: number }> {
-    return this.request('post', '/broadcast', { message });
+  async sendBroadcast(
+    message: string,
+    segment: BroadcastSegment = 'all'
+  ): Promise<{ success: boolean; message: string; sent: number }> {
+    return this.request('post', '/broadcast', { message, segment });
+  }
+
+  async grantPremium(chatId: string, days: number): Promise<{ success: boolean; message: string }> {
+    return this.request('post', `/users/${chatId}/premium`, { days });
+  }
+
+  async revokePremium(chatId: string): Promise<{ success: boolean; message: string }> {
+    return this.request('delete', `/users/${chatId}/premium`);
+  }
+
+  async getPayments(): Promise<PaymentRecord[]> {
+    return this.request('get', '/payments');
+  }
+
+  async getPerformance(): Promise<SignalPerformance> {
+    const r = await axios.get(`${API_BASE}/signals/performance`);
+    return r.data;
   }
 
   async getCommands(): Promise<TelegramCommand[]> {

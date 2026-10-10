@@ -71,6 +71,22 @@ export const UserDetailModal: React.FC<UserDetailModalProps> = ({
               <p className="text-sm text-gray-400">Última interacción</p>
               <p className="text-sm">{lastInteraction}</p>
             </div>
+            <div>
+              <p className="text-sm text-gray-400">Plan</p>
+              <p className="font-medium">
+                {user.is_premium
+                  ? `💎 Premium hasta ${user.premium_until ? new Date(user.premium_until).toLocaleDateString() : '—'}`
+                  : `Free${user.trial_used ? ' (prueba usada)' : ''}`}
+              </p>
+            </div>
+            <div>
+              <p className="text-sm text-gray-400">Pagos / referidos</p>
+              <p className="text-sm">
+                {user.total_paid_stars || 0} ⭐ · {user.referral_count || 0} referidos
+                {user.referred_by ? ` · invitado por ${user.referred_by}` : ''}
+                {user.blocked ? ' · bloqueó el bot' : ''}
+              </p>
+            </div>
           </div>
 
           {/* Estado actual */}
