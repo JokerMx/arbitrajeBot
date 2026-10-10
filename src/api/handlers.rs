@@ -378,12 +378,7 @@ pub async fn get_telegram_stats(state: ApiState) -> Result<impl Reply, Rejection
         let stats = bot.get_stats().await;
         Ok(json(&stats))
     } else {
-        Ok(json(&crate::telegram_bot::TelegramStats {
-            total_users: 0,
-            authorized_users: 0,
-            subscribed_users: 0,
-            active_today: 0,
-        }))
+        Ok(json(&crate::telegram_bot::TelegramStats::default()))
     }
 }
 
@@ -508,7 +503,11 @@ pub async fn send_telegram_broadcast(
 ) -> Result<impl Reply, Rejection> {
     if let Some(bot) = &state.telegram_bot {
         let message = body["message"].as_str().unwrap_or("");
-        match bot.broadcast_message(message).await {
+        let segment = body["segment"].as_str().unwrap_or("all");
+        if message.trim().is_empty() {
+            return Ok(json(&serde_json::json!({ "success": false, "message": "Mensaje vacío", "sent": 0 })));
+        }
+        match bot.broadcast_segment(message, segment).await {
             Ok(sent) => Ok(json(&serde_json::json!({
                 "success": true,
                 "message": "Broadcast enviado",
@@ -530,65 +529,95 @@ pub async fn send_telegram_broadcast(
 }
 
 pub async fn get_telegram_commands(_state: ApiState) -> Result<impl Reply, Rejection> {
-    let commands = vec![
-        serde_json::json!({
-            "command": "/start",
-            "description": "Iniciar el bot",
-            "access": "public"
-        }),
-        serde_json::json!({
-            "command": "/help",
-            "description": "Mostrar ayuda",
-            "access": "public"
-        }),
-        serde_json::json!({
-            "command": "/status",
-            "description": "Ver estado del bot",
-            "access": "authorized"
-        }),
-        serde_json::json!({
-            "command": "/balance",
-            "description": "Ver balance",
-            "access": "authorized"
-        }),
-        serde_json::json!({
-            "command": "/trades",
-            "description": "Ver últimos trades",
-            "access": "authorized"
-        }),
-        serde_json::json!({
-            "command": "/subscribe",
-            "description": "Suscribirse a notificaciones",
-            "access": "public"
-        }),
-        serde_json::json!({
-            "command": "/unsubscribe",
-            "description": "Darse de baja",
-            "access": "public"
-        }),
-        serde_json::json!({
-            "command": "/users",
-            "description": "Listar usuarios (admin)",
-            "access": "admin"
-        }),
-        serde_json::json!({
-            "command": "/authorize",
-            "description": "Autorizar usuario (admin)",
-            "access": "admin"
-        }),
-        serde_json::json!({
-            "command": "/deauthorize",
-            "description": "Desautorizar usuario (admin)",
-            "access": "admin"
-        }),
-        serde_json::json!({
-            "command": "/broadcast",
-            "description": "Enviar mensaje a todos (admin)",
-            "access": "admin"
-        }),
+    let list: &[(&str, &str, &str)] = &[
+        ("/start", "Bienvenida (acepta enlaces de referido)", "public"),
+        ("/premium", "Planes y pago con Telegram Stars", "public"),
+        ("/trial", "Prueba Premium gratis (una vez)", "public"),
+        ("/plan", "Plan actual del usuario", "public"),
+        ("/performance", "Resultados de las señales", "public"),
+        ("/referral", "Enlace de referido", "public"),
+        ("/signals", "Señales abiertas", "premium"),
+        ("/subscribe", "Activar avisos", "public"),
+        ("/unsubscribe", "Pausar avisos", "public"),
+        ("/terms", "Términos del servicio", "public"),
+        ("/paysupport", "Soporte de pagos", "public"),
+        ("/status", "Estado de la cuenta del bot", "admin"),
+        ("/balance", "Balance de la cuenta del bot", "admin"),
+        ("/trades", "Últimas señales", "admin"),
+        ("/stats", "Usuarios e ingresos", "admin"),
+        ("/users", "Listar usuarios", "admin"),
+        ("/authorize", "Autorizar usuario", "admin"),
+        ("/deauthorize", "Desautorizar usuario", "admin"),
+        ("/grant", "Regalar días Premium", "admin"),
+        ("/revoke", "Quitar Premium", "admin"),
+        ("/refund", "Reembolsar pago en Stars", "admin"),
+        ("/broadcast", "Mensaje a todos (también _free / _premium)", "admin"),
     ];
+    let commands: Vec<serde_json::Value> = list
+        .iter()
+        .map(|(c, d, a)| serde_json::json!({ "command": c, "description": d, "access": a }))
+        .collect();
     Ok(json(&commands))
 }
+
+// =============================================
+// MONETIZACIÓN
+// =============================================
+
+fn no_telegram() -> warp::reply::Json {
+    json(&serde_json::json!({ "success": false, "message": "Bot de Telegram no disponible" }))
+}
+
+pub async fn grant_telegram_premium(
+    chat_id: String,
+    body: serde_json::Value,
+    state: ApiState,
+) -> Result<impl Reply, Rejection> {
+    let Some(bot) = &state.telegram_bot else { return Ok(no_telegram()) };
+    let days = body["days"].as_i64().unwrap_or(30);
+    Ok(match bot.grant_premium(&chat_id, days).await {
+        Ok(until) => json(&serde_json::json!({
+            "success": true,
+            "message": format!("Premium hasta {}", until.format("%d-%m-%Y")),
+            "premium_until": until
+        })),
+        Err(e) => json(&serde_json::json!({ "success": false, "message": e })),
+    })
+}
+
+pub async fn revoke_telegram_premium(chat_id: String, state: ApiState) -> Result<impl Reply, Rejection> {
+    let Some(bot) = &state.telegram_bot else { return Ok(no_telegram()) };
+    Ok(match bot.revoke_premium(&chat_id).await {
+        Ok(_) => json(&serde_json::json!({ "success": true, "message": "Premium revocado" })),
+        Err(e) => json(&serde_json::json!({ "success": false, "message": e })),
+    })
+}
+
+pub async fn get_telegram_payments(state: ApiState) -> Result<impl Reply, Rejection> {
+    match &state.telegram_bot {
+        Some(bot) => Ok(json(&bot.get_payments().await)),
+        None => Ok(json(&Vec::<crate::telegram_bot::PaymentRecord>::new())),
+    }
+}
+
+pub async fn get_signal_performance(state: ApiState) -> Result<impl Reply, Rejection> {
+    match &state.telegram_bot {
+        Some(bot) => Ok(json(&bot.get_performance().await)),
+        None => Ok(json(&crate::signals::Performance::default())),
+    }
+}
+
+pub async fn get_signal_history(state: ApiState) -> Result<impl Reply, Rejection> {
+    match &state.telegram_bot {
+        Some(bot) => Ok(json(&bot.get_signals(200).await)),
+        None => Ok(json(&Vec::<crate::signals::SignalRecord>::new())),
+    }
+}
+
+/// Rechazo por falta de token de administración
+#[derive(Debug)]
+pub struct Unauthorized;
+impl warp::reject::Reject for Unauthorized {}
 
 // =============================================
 // MANEJADOR DE ERRORES
@@ -598,7 +627,10 @@ pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Rejection> {
     let code;
     let message;
     
-    if err.is_not_found() {
+    if err.find::<Unauthorized>().is_some() {
+        code = warp::http::StatusCode::UNAUTHORIZED;
+        message = "No autorizado: falta o es inválido el token (ADMIN_API_TOKEN)";
+    } else if err.is_not_found() {
         code = warp::http::StatusCode::NOT_FOUND;
         message = "Ruta no encontrada";
     } else if err.find::<warp::reject::MethodNotAllowed>().is_some() {

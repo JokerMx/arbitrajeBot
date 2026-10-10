@@ -151,6 +151,32 @@ pub fn api_routes(
         .and(state_filter.clone())
         .and_then(handlers::send_telegram_broadcast);
     
+    let telegram_grant = warp::path!("api" / "telegram" / "users" / String / "premium")
+        .and(warp::post())
+        .and(warp::body::json())
+        .and(state_filter.clone())
+        .and_then(handlers::grant_telegram_premium);
+
+    let telegram_revoke = warp::path!("api" / "telegram" / "users" / String / "premium")
+        .and(warp::delete())
+        .and(state_filter.clone())
+        .and_then(handlers::revoke_telegram_premium);
+
+    let telegram_payments = warp::path!("api" / "telegram" / "payments")
+        .and(warp::get())
+        .and(state_filter.clone())
+        .and_then(handlers::get_telegram_payments);
+
+    let signal_performance = warp::path!("api" / "signals" / "performance")
+        .and(warp::get())
+        .and(state_filter.clone())
+        .and_then(handlers::get_signal_performance);
+
+    let signal_history = warp::path!("api" / "signals")
+        .and(warp::get())
+        .and(state_filter.clone())
+        .and_then(handlers::get_signal_history);
+
     let telegram_commands = warp::path!("api" / "telegram" / "commands")
         .and(warp::get())
         .and(state_filter.clone())
@@ -201,7 +227,26 @@ pub fn api_routes(
     // COMBINAR TODAS LAS RUTAS
     // =============================================
     
-    let routes = stats
+    // Token de administración (ADMIN_API_TOKEN). Si no está definido, la API queda abierta
+    // (solo aceptable escuchando en 127.0.0.1).
+    let api_token = std::env::var("ADMIN_API_TOKEN").ok().filter(|t| !t.trim().is_empty());
+    if api_token.is_none() {
+        tracing::warn!("⚠️ ADMIN_API_TOKEN no definido: la API de administración no pide autenticación");
+    }
+    let auth = warp::header::optional::<String>("authorization")
+        .and_then(move |header: Option<String>| {
+            let expected = api_token.clone().map(|t| format!("Bearer {}", t));
+            async move {
+                match expected {
+                    None => Ok(()),
+                    Some(e) if header.as_deref() == Some(e.as_str()) => Ok(()),
+                    _ => Err(warp::reject::custom(handlers::Unauthorized)),
+                }
+            }
+        })
+        .untuple_one();
+
+    let api = auth.and(stats
         .or(config)
         .or(update_config)
         .or(start)
@@ -217,6 +262,13 @@ pub fn api_routes(
         .or(telegram_delete)
         .or(telegram_broadcast)
         .or(telegram_commands)
+        .or(telegram_grant)
+        .or(telegram_revoke)
+        .or(telegram_payments)
+        .or(signal_performance)
+        .or(signal_history));
+
+    let routes = api
         .or(ws)
         .or(dashboard_index)
         .or(static_files)

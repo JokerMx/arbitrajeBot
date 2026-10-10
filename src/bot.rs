@@ -18,10 +18,13 @@ use crate::executor::OrderExecutor;
 use crate::notifier::TelegramNotifier;
 use crate::executor::ExchangeType;
 use crate::hyperliquid::HyperliquidClient;
+use crate::trend::{TrendConfig, TrendTrader};
 
 #[derive(Clone)]
 pub struct TradingBot {
     markets: HashMap<String, MarketManager>,
+    /// Estrategia de tendencia (STRATEGY_MODE=trend); si está activa no se hace market making
+    trend: Option<TrendTrader>,
     risk_manager: Arc<Mutex<RiskManager>>,
     executor: Arc<OrderExecutor>,
     notifier: Arc<TelegramNotifier>,
@@ -55,7 +58,7 @@ impl TradingBot {
         market_configs: Vec<MarketConfig>,
         strategy_config: StrategyConfig,
         _risk_config: RiskConfig,
-        _initial_capital: Decimal,
+        initial_capital: Decimal,
         notifier: Arc<TelegramNotifier>,
         risk_manager: Arc<Mutex<RiskManager>>,
         exchange_type: ExchangeType,
@@ -74,8 +77,57 @@ impl TradingBot {
         // Crear cliente Hyperliquid (una sola vez para todos los mercados)
         let hyperliquid_client = Arc::new(HyperliquidClient::new(&config.private_key, !is_testnet).await?);
         
+        let strategy_mode = std::env::var("STRATEGY_MODE").unwrap_or_else(|_| "trend".to_string());
+        info!("🧠 Modo de estrategia: {}", strategy_mode);
+
         let mut markets = HashMap::new();
+        let mut trend = None;
+        if strategy_mode == "trend" {
+            // TREND_SYMBOLS=BTC,ETH,... tiene prioridad sobre los mercados habilitados en la BD
+            let from_env: Vec<String> = std::env::var("TREND_SYMBOLS")
+                .unwrap_or_default()
+                .split(',')
+                .map(|s| s.trim().to_uppercase())
+                .filter(|s| !s.is_empty())
+                .collect();
+            let candidates: Vec<String> = if from_env.is_empty() {
+                market_configs.iter().filter(|m| m.enabled).map(|m| m.symbol.clone()).collect()
+            } else {
+                from_env
+            };
+            let symbols: Vec<String> = candidates
+                .into_iter()
+                .filter(|s| {
+                    let known = hyperliquid_client.get_market_info(s).is_some();
+                    if !known {
+                        warn!("⚠️ {} no existe en Hyperliquid, se ignora", s);
+                    }
+                    known
+                })
+                .collect();
+            if symbols.is_empty() {
+                warn!("⚠️ Sin mercados para la estrategia de tendencia: define TREND_SYMBOLS o habilita mercados en el dashboard");
+            }
+            let live = exchange_type == ExchangeType::HyperliquidMainnet;
+            if !live {
+                warn!("📄 Tendencia en modo PAPEL (EXCHANGE_TYPE no es hyperliquid_mainnet): sin órdenes reales");
+            }
+            trend = Some(TrendTrader::new(
+                TrendConfig::from_env(),
+                symbols,
+                hyperliquid_client.clone(),
+                risk_manager.clone(),
+                notifier.clone(),
+                live,
+                !is_testnet,
+                initial_capital,
+            ));
+        }
+
         for mut market_config in market_configs {
+            if trend.is_some() {
+                break;
+            }
             if !market_config.enabled {
                 continue;
             }
@@ -105,6 +157,7 @@ impl TradingBot {
         
         Ok(Self {
             markets,
+            trend,
             risk_manager,
             executor,
             notifier,
@@ -113,6 +166,10 @@ impl TradingBot {
     }
 
     pub async fn start(&mut self) -> anyhow::Result<()> {
+        if let Some(trend) = self.trend.as_mut() {
+            info!("🚀 Iniciando bot (seguimiento de tendencia)");
+            return trend.start().await;
+        }
         info!("🚀 Iniciando bot de market making");
         
         for (symbol, market) in self.markets.iter_mut() {
@@ -125,6 +182,10 @@ impl TradingBot {
     }
 
     pub async fn update_markets(&mut self) {
+        if let Some(trend) = self.trend.as_mut() {
+            trend.tick().await;
+            return;
+        }
         for market in self.markets.values_mut() {
             market.update_market_data().await;
         }
@@ -136,6 +197,9 @@ impl TradingBot {
 
     pub async fn stop(&mut self) -> anyhow::Result<()> {
         info!("🛑 Deteniendo bot...");
+        if let Some(trend) = self.trend.as_mut() {
+            trend.stop().await;
+        }
         
         for (symbol, market) in self.markets.iter_mut() {
             if let Err(e) = market.stop().await {

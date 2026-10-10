@@ -1,3 +1,5 @@
+// warp: la cadena de rutas .or() supera el límite de recursión por defecto
+#![recursion_limit = "256"]
 //! Hyperliquid Market Making Bot - PRODUCCIÓN MAINNET (API REST + firma)
 
 use dotenv::dotenv;
@@ -12,6 +14,8 @@ use rust_decimal_macros::dec;
 
 mod types;
 mod strategy;
+mod trend;
+mod signals;
 mod market;
 mod risk;
 mod executor;
@@ -332,8 +336,9 @@ async fn main() -> anyhow::Result<()> {
 
     tokio::select! {
         result = async {
-            let bot_guard = bot_clone_for_run.lock().await;
-            bot_guard.clone().run_until_signal().await
+            // Clonar y soltar el lock: si se retiene, la API (start/stop/restart) se bloquea para siempre
+            let bot_to_run = bot_clone_for_run.lock().await.clone();
+            bot_to_run.run_until_signal().await
         } => {
             if let Err(e) = result {
                 error!("❌ Error en el bot: {}", e);

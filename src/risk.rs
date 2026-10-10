@@ -29,6 +29,10 @@ pub struct RiskManager {
     protection: ProtectionConfigDB,
     leverage_configs: std::collections::HashMap<String, i32>,
     stop_loss_triggered: bool,
+    /// Equity al inicio del día (para el P&L diario con datos reales del exchange)
+    day_start_balance: Decimal,
+    /// `true` una vez que el balance se sincronizó con el exchange
+    synced_with_exchange: bool,
 }
 
 impl RiskManager {
@@ -51,6 +55,8 @@ impl RiskManager {
             protection: ProtectionConfigDB::default(),
             leverage_configs: std::collections::HashMap::new(),
             stop_loss_triggered: false,
+            day_start_balance: initial_capital,
+            synced_with_exchange: false,
         }
     }
 
@@ -162,7 +168,8 @@ impl RiskManager {
                     .unwrap_or(0.25),
             )
             .unwrap_or(dec!(12.50)))
-        .max(Decimal::from_f64(10.0).unwrap_or(dec!(10)));
+        // Mínimo de Hyperliquid ($10) + margen para redondeo de precio/tamaño
+        .max(dec!(11));
 
         if margin_used > max_capital_at_risk {
             return (
@@ -228,6 +235,11 @@ impl RiskManager {
     // =============================================
 
     pub fn check_order(&mut self, order: &OrderRequest, current_price: Decimal) -> bool {
+        // Una orden reduce-only solo puede achicar la posición: siempre se permite
+        if order.reduce_only {
+            return true;
+        }
+
         if self.kill_switch_engaged {
             warn!("🔫 Kill switch engaged - orden rechazada");
             return false;
@@ -264,7 +276,7 @@ impl RiskManager {
 
         let order_value = order.quantity * current_price;
         let max_order_pct = Decimal::from_f64(0.50).unwrap();
-        let base_limit = (self.initial_capital * max_order_pct).max(dec!(10));
+        let base_limit = (self.initial_capital * max_order_pct).max(dec!(11));
         let max_order_value = base_limit;
 
         if order_value > max_order_value {
@@ -436,6 +448,67 @@ impl RiskManager {
         if self.current_balance > self.peak_balance {
             self.peak_balance = self.current_balance;
         }
+    }
+
+    /// Sincroniza el balance con la equity REAL del exchange.
+    /// La primera sincronización fija el capital inicial a la equity real, para que
+    /// stop-loss y drawdown se midan contra el dinero que realmente hay en la cuenta.
+    pub fn sync_balance(&mut self, equity: Decimal) {
+        if equity <= Decimal::ZERO {
+            return;
+        }
+        if !self.synced_with_exchange {
+            if self.initial_capital != equity {
+                info!(
+                    "🔄 Capital inicial ajustado a equity real: ${:.2} (config: ${:.2})",
+                    equity, self.initial_capital
+                );
+            }
+            self.initial_capital = equity;
+            self.peak_balance = equity;
+            self.day_start_balance = equity;
+            self.synced_with_exchange = true;
+        }
+
+        let today = Utc::now().date_naive();
+        if today != self.current_date {
+            self.current_date = today;
+            self.day_start_balance = equity;
+        }
+
+        self.current_balance = equity;
+        self.daily_pnl = equity - self.day_start_balance;
+        if equity > self.peak_balance {
+            self.peak_balance = equity;
+        }
+    }
+
+    /// `true` si se debe dejar de abrir posiciones y cerrar lo abierto
+    /// (kill switch, stop loss, pérdida diaria o drawdown máximo).
+    pub fn should_flatten(&mut self) -> bool {
+        if self.kill_switch_engaged || self.stop_loss_triggered {
+            return true;
+        }
+        let (ok, msg) = self.check_stop_loss();
+        if !ok {
+            warn!("{}", msg);
+            self.stop_loss_triggered = true;
+            return true;
+        }
+        if self.daily_pnl < -self.get_max_daily_loss_usd() {
+            warn!("📉 Límite diario de pérdidas alcanzado: ${:.2}", self.daily_pnl);
+            self.status = RiskStatus::ApproachingLimit;
+            return true;
+        }
+        let max_drawdown = Decimal::from_f64(self.config.max_drawdown_pct).unwrap_or(dec!(0.15));
+        if self.current_drawdown() > max_drawdown {
+            warn!("📉 Max drawdown alcanzado: {:.2}%", self.current_drawdown() * dec!(100));
+            if self.config.kill_switch_enabled {
+                self.engage_kill_switch();
+            }
+            return true;
+        }
+        false
     }
 
     pub fn get_position(&self, symbol: &str) -> Option<&Position> {

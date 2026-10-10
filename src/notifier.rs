@@ -17,6 +17,8 @@ pub struct TelegramNotifier {
     notify_status: Arc<Mutex<bool>>,      // Configurable desde .env
     message_tx: Arc<Mutex<Option<broadcast::Sender<String>>>>,
     recent_fill_ids: Arc<Mutex<Vec<String>>>,
+    /// Bus de señales de trading hacia los suscriptores (lo consume el bot de Telegram)
+    signal_tx: broadcast::Sender<crate::signals::SignalEvent>,
 }
 
 impl TelegramNotifier {
@@ -41,6 +43,7 @@ impl TelegramNotifier {
             notify_status: Arc::new(Mutex::new(true)),   // Por defecto true
             message_tx: Arc::new(Mutex::new(None)),
             recent_fill_ids: Arc::new(Mutex::new(Vec::with_capacity(100))),
+            signal_tx: broadcast::channel(256).0,
         }
     }
     
@@ -75,9 +78,19 @@ impl TelegramNotifier {
             notify_status: Arc::new(Mutex::new(notify_status)),
             message_tx: Arc::new(Mutex::new(None)),
             recent_fill_ids: Arc::new(Mutex::new(Vec::with_capacity(100))),
+            signal_tx: broadcast::channel(256).0,
         }
     }
     
+    /// Publica una señal para los suscriptores. Si nadie escucha (sin bot de Telegram) se descarta.
+    pub fn publish_signal(&self, event: crate::signals::SignalEvent) {
+        let _ = self.signal_tx.send(event);
+    }
+
+    pub fn subscribe_signals(&self) -> broadcast::Receiver<crate::signals::SignalEvent> {
+        self.signal_tx.subscribe()
+    }
+
     /// Inicializar canal de broadcast para logs
     pub async fn init_broadcast(&self) -> broadcast::Sender<String> {
         let (tx, _) = broadcast::channel(100);

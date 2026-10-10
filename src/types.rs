@@ -30,6 +30,8 @@ pub enum TimeInForce {
     GoodTillCancel,
     ImmediateOrCancel,
     FillOrKill,
+    /// Post-only (ALO en Hyperliquid): se rechaza si cruzaría el libro, siempre paga fee maker
+    PostOnly,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -147,6 +149,11 @@ impl OrderRequest {
 
     pub fn reduce_only(mut self) -> Self {
         self.reduce_only = true;
+        self
+    }
+
+    pub fn post_only(mut self) -> Self {
+        self.time_in_force = TimeInForce::PostOnly;
         self
     }
 }

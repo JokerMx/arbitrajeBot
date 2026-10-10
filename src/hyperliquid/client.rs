@@ -4,13 +4,18 @@
 use anyhow::{Result, anyhow};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
-use rust_decimal::MathematicalOps;
+use rust_decimal::RoundingStrategy;
 use tracing::{info, error, warn};
 
 use hypersdk::hypercore::{self, types::*, PrivateKeySigner, NonceHandler};
-use hypersdk::{Address, dec};
+use hypersdk::Address;
 
 use super::models::*;
+
+/// Valor mínimo de orden en Hyperliquid (USD)
+pub const MIN_ORDER_VALUE_USD: f64 = 10.0;
+/// Slippage máximo de un stop-loss market disparado
+pub const STOP_SLIPPAGE: Decimal = rust_decimal_macros::dec!(0.03);
 
 // ------------------------------------------------------------
 // Cliente principal - usa hypersdk para Hyperliquid Mainnet
@@ -36,8 +41,19 @@ impl HyperliquidClient {
         let signer: PrivateKeySigner = private_key.parse()
             .map_err(|e| anyhow!("Invalid private key: {}", e))?;
         
-        let wallet_address = signer.address();
-        
+        // Con una API wallet (agente) la clave firma pero la cuenta con fondos es otra:
+        // WALLET indica la cuenta principal a consultar. Un agente no puede retirar fondos.
+        let wallet_address = match std::env::var("WALLET").ok().filter(|w| !w.trim().is_empty()) {
+            Some(w) => {
+                let addr: Address = w.trim().parse().map_err(|e| anyhow!("WALLET inválida: {}", e))?;
+                if addr != signer.address() {
+                    info!("🔐 Modo API wallet: firma {} en nombre de {}", signer.address(), addr);
+                }
+                addr
+            }
+            None => signer.address(),
+        };
+
         info!("📍 Wallet address: {}", wallet_address);
         info!("🌐 Network: {}", if is_mainnet { "mainnet" } else { "testnet" });
 
@@ -154,7 +170,7 @@ impl HyperliquidClient {
     }
 
     // --------------------------------------------------------
-    // Colocar orden límite
+    // Colocar orden límite (GTC, compatible con código existente)
     // --------------------------------------------------------
     pub async fn place_limit_order(
         &self,
@@ -163,93 +179,302 @@ impl HyperliquidClient {
         quantity: Decimal,
         price: Decimal,
     ) -> Result<HyperliquidOrderResponse> {
+        self.place_order_ext(asset_index, side, quantity, price, TimeInForce::Gtc, false).await
+    }
+
+    // --------------------------------------------------------
+    // Colocar orden con TIF y reduce_only explícitos.
+    // Devuelve el oid REAL del exchange (necesario para cancelar).
+    // --------------------------------------------------------
+    pub async fn place_order_ext(
+        &self,
+        asset_index: u32,
+        side: HyperliquidOrderSide,
+        quantity: Decimal,
+        price: Decimal,
+        tif: TimeInForce,
+        reduce_only: bool,
+    ) -> Result<HyperliquidOrderResponse> {
         let is_buy = side == HyperliquidOrderSide::Buy;
-        
+
         let symbol = self.get_symbol_for_index(asset_index);
-        let rounded_price = self.round_price(&symbol, price).unwrap_or(price);
+        // Redondeo direccional: una compra nunca se redondea hacia arriba ni una venta hacia abajo
+        let rounded_price = self.round_price_dir(&symbol, price, !is_buy).unwrap_or(price);
         let rounded_size = self.round_size(&symbol, quantity).unwrap_or(quantity);
-        
+
         let order_value = rounded_size * rounded_price;
-        const MIN_ORDER_VALUE: f64 = 10.0;
-        
-        let final_size = if order_value < Decimal::from_f64(MIN_ORDER_VALUE).unwrap() {
-            let min_size = Decimal::from_f64(MIN_ORDER_VALUE).unwrap() / rounded_price;
-            self.round_size(&symbol, min_size).unwrap_or(min_size)
+        let min_value = Decimal::from_f64(MIN_ORDER_VALUE_USD).unwrap();
+
+        // Las órdenes reduce_only cierran una posición existente: no se infla su tamaño
+        let final_size = if !reduce_only && order_value < min_value {
+            let min_size = min_value / rounded_price;
+            self.round_size_up(&symbol, min_size).unwrap_or(min_size)
         } else {
             rounded_size
         };
-        
+
+        if final_size <= Decimal::ZERO {
+            return Err(anyhow!("Tamaño de orden inválido para {}: {}", symbol, final_size));
+        }
+
         let final_value = final_size * rounded_price;
-        
-        info!("📤 Placing order: asset={} ({}) side={} size={} price={} value=${:.2}", 
-            asset_index, symbol, is_buy, final_size, rounded_price, final_value);
-        
+
+        info!("📤 Placing order: {} {} size={} price={} value=${:.2} tif={:?} reduce_only={}",
+            symbol, if is_buy { "BUY" } else { "SELL" }, final_size, rounded_price, final_value, tif, reduce_only);
+
         let order = BatchOrder {
             orders: vec![OrderRequest {
                 asset: asset_index as usize,
                 is_buy,
                 limit_px: rounded_price,
                 sz: final_size,
-                reduce_only: false,
-                order_type: OrderTypePlacement::Limit {
-                    tif: TimeInForce::Gtc,
-                },
+                reduce_only,
+                order_type: OrderTypePlacement::Limit { tif },
                 cloid: Default::default(),
             }],
             grouping: OrderGrouping::Na,
         };
 
         let nonce = self.nonce_handler.next();
-        
+
         let result = self.http_client.place(&self.signer, order, nonce, None, None).await
             .map_err(|e| {
                 error!("❌ Order failed: asset={}, error={}", asset_index, e);
                 anyhow!("Order failed: {}", e)
             })?;
 
-        if result.is_empty() {
-            warn!("No statuses in response");
-            return Ok(HyperliquidOrderResponse {
-                success: true,
-                order_id: format!("nonce_{}", nonce),
-                message: "Order submitted".to_string(),
-            });
-        }
-
         for status in &result {
-            let status_str = format!("{:?}", status);
-            
-            if status_str.contains("Error") {
-                error!("❌ Orden rechazada: {}", status_str);
-                return Err(anyhow!("Order rejected: {}", status_str));
-            }
-            
-            if status_str.contains("OrderId") {
-                info!("✅ Orden colocada exitosamente");
-                return Ok(HyperliquidOrderResponse {
-                    success: true,
-                    order_id: format!("nonce_{}", nonce),
-                    message: "Order placed".to_string(),
-                });
+            match status {
+                OrderResponseStatus::Resting { oid, .. } => {
+                    info!("✅ Orden en libro oid={}", oid);
+                    return Ok(HyperliquidOrderResponse {
+                        success: true,
+                        order_id: oid.to_string(),
+                        message: "Resting".to_string(),
+                    });
+                }
+                OrderResponseStatus::Filled { oid, total_sz, avg_px } => {
+                    info!("✅ Orden ejecutada oid={} sz={} px={}", oid, total_sz, avg_px);
+                    return Ok(HyperliquidOrderResponse {
+                        success: true,
+                        order_id: oid.to_string(),
+                        message: "Filled".to_string(),
+                    });
+                }
+                OrderResponseStatus::Error(msg) => {
+                    // Con ALO (post-only) es normal que se rechace si cruzaría el libro
+                    warn!("⚠️ Orden rechazada: {}", msg);
+                    return Err(anyhow!("Order rejected: {}", msg));
+                }
+                _ => {}
             }
         }
 
-        Ok(HyperliquidOrderResponse {
-            success: true,
-            order_id: format!("nonce_{}", nonce),
-            message: "Order accepted".to_string(),
-        })
+        Err(anyhow!("Respuesta de orden sin oid: {:?}", result))
     }
 
     // --------------------------------------------------------
-    // Cancelar orden - simplify para evitar problemas de tipos
+    // Cancelar orden por oid real
     // --------------------------------------------------------
-    pub async fn cancel_order(&self, order_id: u64) -> Result<()> {
-        // Por ahora, usamos un approach más simple
-        // El usuario puede cancelar desde la UI si es necesario
-        warn!("Cancelación de órdenes requiere implementación adicional");
-        info!("Para cancelar orden {}, usa la UI de Hyperliquid", order_id);
+    pub async fn cancel_order(&self, asset_index: u32, oid: u64) -> Result<()> {
+        let batch = BatchCancel {
+            cancels: vec![Cancel { asset: asset_index as usize, oid }],
+        };
+        let nonce = self.nonce_handler.next();
+        let result = self.http_client.cancel(&self.signer, batch, nonce, None, None).await
+            .map_err(|e| anyhow!("Cancel failed: {}", e))?;
+        for status in &result {
+            if let OrderResponseStatus::Error(msg) = status {
+                // Típicamente: la orden ya se ejecutó o ya estaba cancelada
+                warn!("⚠️ Cancel oid={}: {}", oid, msg);
+            }
+        }
         Ok(())
+    }
+
+    // --------------------------------------------------------
+    // Cancelar TODAS las órdenes abiertas de un símbolo (un solo request)
+    // --------------------------------------------------------
+    pub async fn cancel_all_for(&self, symbol: &str) -> Result<usize> {
+        let asset = self
+            .get_market_info(symbol)
+            .map(|m| m.index)
+            .ok_or_else(|| anyhow!("Mercado {} desconocido", symbol))?;
+        let open = self.http_client.open_orders(self.wallet_address, None).await?;
+        let cancels: Vec<Cancel> = open
+            .iter()
+            .filter(|o| o.coin == symbol)
+            .map(|o| Cancel { asset, oid: o.oid })
+            .collect();
+        let n = cancels.len();
+        if n == 0 {
+            return Ok(0);
+        }
+        let nonce = self.nonce_handler.next();
+        self.http_client
+            .cancel(&self.signer, BatchCancel { cancels }, nonce, None, None)
+            .await
+            .map_err(|e| anyhow!("Cancel all failed: {}", e))?;
+        info!("🗑️ Canceladas {} órdenes abiertas de {}", n, symbol);
+        Ok(n)
+    }
+
+    // --------------------------------------------------------
+    // Posición actual: (tamaño con signo, precio de entrada)
+    // --------------------------------------------------------
+    pub async fn get_position(&self, symbol: &str) -> Result<(Decimal, Decimal)> {
+        let state = self.http_client.clearinghouse_state(self.wallet_address, None).await?;
+        for ap in &state.asset_positions {
+            if ap.position.coin == symbol {
+                return Ok((ap.position.szi, ap.position.entry_px.unwrap_or(Decimal::ZERO)));
+            }
+        }
+        Ok((Decimal::ZERO, Decimal::ZERO))
+    }
+
+    // --------------------------------------------------------
+    // Equity real de la cuenta (cross margin)
+    // --------------------------------------------------------
+    pub async fn get_account_value(&self) -> Result<Decimal> {
+        let state = self.http_client.clearinghouse_state(self.wallet_address, None).await?;
+        Ok(state.cross_margin_summary.account_value)
+    }
+
+    // --------------------------------------------------------
+    // Cerrar la posición completa con orden IOC reduce_only agresiva
+    // (equivale a "market close"; paga fee taker)
+    // --------------------------------------------------------
+    pub async fn close_position(&self, symbol: &str, max_slippage: Decimal) -> Result<()> {
+        let (szi, _) = self.get_position(symbol).await?;
+        if szi.is_zero() {
+            return Ok(());
+        }
+        let asset = self
+            .get_market_info(symbol)
+            .map(|m| m.index as u32)
+            .ok_or_else(|| anyhow!("Mercado {} desconocido", symbol))?;
+        let mid = self.get_mid_price(symbol).await?;
+        let (side, px) = if szi > Decimal::ZERO {
+            (HyperliquidOrderSide::Sell, mid * (Decimal::ONE - max_slippage))
+        } else {
+            (HyperliquidOrderSide::Buy, mid * (Decimal::ONE + max_slippage))
+        };
+        warn!("🔻 Cerrando posición {} de {} a mercado (px límite {})", szi, symbol, px);
+        self.place_order_ext(asset, side, szi.abs(), px, TimeInForce::Ioc, true).await?;
+        Ok(())
+    }
+
+    // --------------------------------------------------------
+    // Foto de la cuenta: equity y posiciones (coin -> (tamaño, entrada))
+    // en un solo request
+    // --------------------------------------------------------
+    pub async fn get_account_snapshot(
+        &self,
+    ) -> Result<(Decimal, std::collections::HashMap<String, (Decimal, Decimal)>)> {
+        let state = self.http_client.clearinghouse_state(self.wallet_address, None).await?;
+        let mut positions = std::collections::HashMap::new();
+        for ap in &state.asset_positions {
+            let p = &ap.position;
+            if !p.szi.is_zero() {
+                positions.insert(p.coin.clone(), (p.szi, p.entry_px.unwrap_or(Decimal::ZERO)));
+            }
+        }
+        Ok((state.cross_margin_summary.account_value, positions))
+    }
+
+    // --------------------------------------------------------
+    // Stop-loss en el EXCHANGE (trigger market reduce-only).
+    // Protege la posición aunque el bot esté apagado.
+    // `long_position = true` -> el stop vende.
+    // Devuelve el oid si se pudo identificar.
+    // --------------------------------------------------------
+    pub async fn place_stop_loss(
+        &self,
+        symbol: &str,
+        long_position: bool,
+        size: Decimal,
+        trigger_px: Decimal,
+    ) -> Result<Option<u64>> {
+        let asset = self
+            .get_market_info(symbol)
+            .map(|m| m.index)
+            .ok_or_else(|| anyhow!("Mercado {} desconocido", symbol))?;
+        let is_buy = !long_position;
+        // El trigger de un stop de venta se redondea hacia abajo (de compra, hacia arriba)
+        let trigger = self.round_price_dir(symbol, trigger_px, is_buy).unwrap_or(trigger_px);
+        // Precio límite = cota de slippage de la orden market disparada
+        let limit = if is_buy {
+            trigger * (Decimal::ONE + STOP_SLIPPAGE)
+        } else {
+            trigger * (Decimal::ONE - STOP_SLIPPAGE)
+        };
+        let limit = self.round_price_dir(symbol, limit, is_buy).unwrap_or(limit);
+        let size = self.round_size(symbol, size).unwrap_or(size);
+
+        let order = BatchOrder {
+            orders: vec![OrderRequest {
+                asset,
+                is_buy,
+                limit_px: limit,
+                sz: size,
+                reduce_only: true,
+                order_type: OrderTypePlacement::Trigger {
+                    is_market: true,
+                    trigger_px: trigger,
+                    tpsl: TpSl::Sl,
+                },
+                cloid: Default::default(),
+            }],
+            grouping: OrderGrouping::Na,
+        };
+        // Stops existentes antes de colocar (para identificar el nuevo si hace falta)
+        let before: Vec<u64> = self
+            .get_stop_orders(symbol)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(oid, _)| oid)
+            .collect();
+        let nonce = self.nonce_handler.next();
+        info!("🛡️ Stop-loss {} size={} trigger={} limit={}", symbol, size, trigger, limit);
+
+        match self.http_client.place(&self.signer, order, nonce, None, None).await {
+            Ok(statuses) => {
+                for st in &statuses {
+                    match st {
+                        OrderResponseStatus::Resting { oid, .. } => return Ok(Some(*oid)),
+                        OrderResponseStatus::Error(msg) => {
+                            return Err(anyhow!("Stop-loss rechazado: {}", msg))
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            // Algunas versiones del SDK no reconocen la respuesta de órdenes trigger:
+            // la orden puede haberse creado igual, se verifica abajo.
+            Err(e) => warn!("Respuesta de stop-loss no reconocida ({}), verificando...", e),
+        }
+
+        let stops = self.get_stop_orders(symbol).await?;
+        stops
+            .iter()
+            .find(|(oid, _)| !before.contains(oid))
+            .map(|(oid, _)| Some(*oid))
+            .ok_or_else(|| anyhow!("No se encontró el stop-loss de {} en el exchange", symbol))
+    }
+
+    // --------------------------------------------------------
+    // Órdenes reduce-only abiertas de un símbolo: (oid, precio límite).
+    // En modo tendencia las únicas órdenes reduce-only que quedan en el
+    // libro son los stops del bot.
+    // --------------------------------------------------------
+    pub async fn get_stop_orders(&self, symbol: &str) -> Result<Vec<(u64, Decimal)>> {
+        let open = self.http_client.open_orders(self.wallet_address, None).await?;
+        Ok(open
+            .iter()
+            .filter(|o| o.coin == symbol && o.reduce_only)
+            .map(|o| (o.oid, o.limit_px))
+            .collect())
     }
 
     // --------------------------------------------------------
@@ -348,16 +573,35 @@ impl HyperliquidClient {
     }
 
     // --------------------------------------------------------
-    // Redondear precio según decimales del mercado
+    // Decimales de precio permitidos por Hyperliquid (perps):
+    // máximo (6 - szDecimals) decimales Y máximo 5 cifras significativas
     // --------------------------------------------------------
-    pub fn round_price(&self, symbol: &str, price: Decimal) -> Option<Decimal> {
+    fn price_decimals(&self, symbol: &str, price: Decimal) -> Option<u32> {
         let market = self.cached_markets.get(symbol)?;
-        let max_decimals = 6 - market.sz_decimals;
-        let max_decimals = max_decimals.max(0).min(8) as u32;
-        
-        let multiplier = dec!(10).powd(Decimal::from_u8(max_decimals as u8).unwrap_or(dec!(1)));
-        let rounded = (price * multiplier).round() / multiplier;
-        Some(rounded)
+        let max_by_sz = (6 - market.sz_decimals).max(0);
+        let int_digits = if price.abs() < Decimal::ONE {
+            0
+        } else {
+            price.abs().trunc().to_string().len() as i64
+        };
+        let max_by_sig = (5 - int_digits).max(0);
+        Some(max_by_sz.min(max_by_sig).min(8) as u32)
+    }
+
+    pub fn round_price(&self, symbol: &str, price: Decimal) -> Option<Decimal> {
+        let dp = self.price_decimals(symbol, price)?;
+        Some(price.round_dp(dp))
+    }
+
+    /// Redondeo direccional: `up = true` hacia arriba (asks), `false` hacia abajo (bids)
+    pub fn round_price_dir(&self, symbol: &str, price: Decimal, up: bool) -> Option<Decimal> {
+        let dp = self.price_decimals(symbol, price)?;
+        let strategy = if up {
+            RoundingStrategy::ToPositiveInfinity
+        } else {
+            RoundingStrategy::ToNegativeInfinity
+        };
+        Some(price.round_dp_with_strategy(dp, strategy))
     }
 
     // --------------------------------------------------------
@@ -365,9 +609,15 @@ impl HyperliquidClient {
     // --------------------------------------------------------
     pub fn round_size(&self, symbol: &str, size: Decimal) -> Option<Decimal> {
         let market = self.cached_markets.get(symbol)?;
-        let multiplier = dec!(10).powd(Decimal::from_f64(market.sz_decimals as f64).unwrap_or(dec!(1)));
-        let rounded = (size * multiplier).round() / multiplier;
-        Some(rounded)
+        Some(size.round_dp(market.sz_decimals.max(0) as u32))
+    }
+
+    fn round_size_up(&self, symbol: &str, size: Decimal) -> Option<Decimal> {
+        let market = self.cached_markets.get(symbol)?;
+        Some(size.round_dp_with_strategy(
+            market.sz_decimals.max(0) as u32,
+            RoundingStrategy::ToPositiveInfinity,
+        ))
     }
 }
 

@@ -1,5 +1,9 @@
+// warp: la cadena de rutas .or() supera el límite de recursión por defecto
+#![recursion_limit = "256"]
 pub mod types;
 pub mod strategy;
+pub mod trend;
+pub mod signals;
 pub mod market;
 pub mod risk;
 pub mod executor;
