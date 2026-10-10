@@ -11,6 +11,10 @@ DEST=${BACKUP_DIR:-./backups}
 
 mkdir -p "$DEST"
 STAMP=$(date +%Y%m%d_%H%M%S)
+# Formato antiguo: subscribers.json en la raíz del proyecto
+if [ -f subscribers.json ]; then
+    cp subscribers.json "$DEST/subscribers_root_$STAMP.json"
+fi
 tar -czf "$DEST/data_$STAMP.tar.gz" -C "$DATA_DIR" . 2>/dev/null || {
     echo "⚠️  No se encontró $DATA_DIR (¿primer arranque?)"
     exit 0
