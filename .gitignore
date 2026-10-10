@@ -33,3 +33,13 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Datos de usuarios, pagos y señales (datos personales: NO subir a git)
+subscribers.json
+payments.json
+signals_history.json
+/data/
+logs/
+tools/backtest/data/
+backups/
+__pycache__/

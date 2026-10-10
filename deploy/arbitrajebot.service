@@ -1,0 +1,37 @@
+# Servicio systemd del bot.
+# Instalar:
+#   sudo cp deploy/arbitrajebot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now arbitrajebot
+# Logs:
+#   journalctl -u arbitrajebot -f
+#
+# Ajusta User y las rutas si el proyecto no está en /opt/arbitrajeBot.
+
+[Unit]
+Description=ArbitrajeBot (trading Hyperliquid + señales Telegram)
+After=network-online.target mariadb.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=arbibot
+Group=arbibot
+WorkingDirectory=/opt/arbitrajeBot
+# dotenv también lee .env desde WorkingDirectory; EnvironmentFile lo hace explícito
+EnvironmentFile=/opt/arbitrajeBot/.env
+Environment=RUST_LOG=info
+ExecStart=/opt/arbitrajeBot/target/release/hyperliquid-mmaker-bot
+# SIGINT = Ctrl+C: el bot cancela órdenes pendientes antes de salir
+KillSignal=SIGINT
+TimeoutStopSec=60
+Restart=always
+RestartSec=15
+# Endurecimiento básico
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/arbitrajeBot/data /opt/arbitrajeBot/logs
+
+[Install]
+WantedBy=multi-user.target
