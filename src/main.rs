@@ -320,7 +320,15 @@ async fn main() -> anyhow::Result<()> {
         telegram_arc,
     );
 
-    let port = 3001;
+    // API_BIND=0.0.0.0 solo dentro de un contenedor; en un servidor deja 127.0.0.1
+    let port: u16 = env::var("API_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(3001);
+    let bind: std::net::IpAddr = env::var("API_BIND")
+        .ok()
+        .and_then(|b| b.parse().ok())
+        .unwrap_or(std::net::IpAddr::from([127, 0, 0, 1]));
+    if !bind.is_loopback() && env::var("ADMIN_API_TOKEN").map_or(true, |t| t.trim().is_empty()) {
+        warn!("⚠️ API expuesta en {} SIN ADMIN_API_TOKEN: cualquiera en la red puede administrarla", bind);
+    }
     info!("🚀 Servidor API iniciado en http://localhost:{}", port);
     info!("📊 Dashboard disponible en http://localhost:{}/dashboard", port);
     info!("📡 WebSocket disponible en ws://localhost:{}/ws", port);
@@ -347,7 +355,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        _ = warp::serve(api_routes).run(([127, 0, 0, 1], port)) => {
+        _ = warp::serve(api_routes).run((bind, port)) => {
             info!("🛑 Servidor API detenido");
         }
     }

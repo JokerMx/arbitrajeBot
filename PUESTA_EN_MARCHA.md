@@ -77,6 +77,8 @@ ssh -L 3001:localhost:3001 usuario@servidor
 
 ## 5. Marcha blanca (2 a 4 semanas)
 
+> Antes de tocar el servidor puedes probar todo en tu PC con `docker-compose.test.yml`. Los pasos están en el [README](README.md#probar-en-5-minutos-modo-papel-con-docker).
+
 En `.env`:
 
 ```

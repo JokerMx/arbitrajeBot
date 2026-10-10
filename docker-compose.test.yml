@@ -1,0 +1,60 @@
+# Entorno de PRUEBA local en modo papel: MariaDB desechable + bot compilado en Docker.
+# No usa tu .env real ni tu base de datos: lee .env.test (copia de .env.test.example).
+#
+#   docker compose -f docker-compose.test.yml up -d      # primera vez: compila ~15-20 min
+#   docker compose -f docker-compose.test.yml logs -f bot
+#   docker compose -f docker-compose.test.yml down       # -v para borrar BD y datos de prueba
+#
+# Dashboard: http://localhost:3001/dashboard/  (compílalo antes: cd web_dashboard && npm run build)
+
+services:
+  db:
+    image: mariadb:11
+    environment:
+      MARIADB_ROOT_PASSWORD: test
+      MARIADB_DATABASE: bot
+    volumes:
+      - testdb:/var/lib/mysql
+    healthcheck:
+      # Por TCP: no responde mientras corre la inicialización (red desactivada)
+      test: ["CMD", "mariadb-admin", "ping", "-h", "127.0.0.1", "-uroot", "-ptest"]
+      interval: 5s
+      retries: 60
+
+  bot:
+    image: rust:1
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env.test
+    environment:
+      DATABASE_URL: mysql://root:test@db:3306/bot
+      # Seguridad: este entorno NUNCA opera con dinero real
+      EXCHANGE_TYPE: simulated
+      API_BIND: 0.0.0.0
+      API_PORT: "3001"
+      DATA_DIR: /work/data
+      CARGO_TARGET_DIR: /target
+    ports:
+      - "127.0.0.1:3001:3001"
+    volumes:
+      - .:/app
+      - cargo-target:/target
+      - cargo-registry:/usr/local/cargo/registry
+      - testdata:/work/data
+    working_dir: /app
+    # Se ejecuta desde /work (no /app) para que dotenv no cargue el .env real
+    command: >
+      sh -c "cargo build --locked &&
+             mkdir -p /work && ln -sfn /app/web_dashboard /work/web_dashboard &&
+             cd /work && exec /target/debug/hyperliquid-mmaker-bot"
+    stop_signal: SIGINT
+    stop_grace_period: 30s
+
+volumes:
+  testdb:
+  testdata:
+  cargo-target:
+    name: arbibot-target
+  cargo-registry:
+    name: arbibot-cargo
