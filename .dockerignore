@@ -1,0 +1,20 @@
+# Nunca dentro de la imagen: secretos y datos
+.env
+.env.*
+!.env-example
+!.env.test.example
+subscribers.json
+payments.json
+signals_history.json
+data/
+backups/
+logs/
+
+# Artefactos y dependencias (se reconstruyen dentro)
+target/
+web_dashboard/node_modules/
+web_dashboard/dist/
+node_modules/
+tools/backtest/data/
+**/__pycache__/
+.git/

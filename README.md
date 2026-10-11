@@ -83,7 +83,18 @@ python funding_stats.py         # funding anualizado por moneda
 
 En Windows, sin `MSYS_NO_PATHCONV=1` Git Bash convierte `/app` y `/target` en rutas de Windows y el comando falla.
 
-## Producción
+## Producción con Docker
+
+```bash
+cp .env-example .env          # completar; para la BD incluida define DB_PASSWORD y DATABASE_URL=...@db:3306/arbibot
+docker compose --profile db up -d --build     # bot + MariaDB
+docker compose up -d --build                  # solo el bot (usa tu DATABASE_URL)
+docker compose logs -f bot
+```
+
+La imagen se construye por etapas (Node → Rust → Debian slim), corre sin root, se reinicia sola y guarda los datos en el volumen `botdata`. Detalles en [PUESTA_EN_MARCHA.md](PUESTA_EN_MARCHA.md#opción-a-docker-recomendada-si-el-servidor-ya-tiene-docker).
+
+## Producción sin Docker (systemd)
 
 Resumen (los detalles, el checklist de marcha blanca y la seguridad están en [PUESTA_EN_MARCHA.md](PUESTA_EN_MARCHA.md)):
 

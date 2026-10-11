@@ -1,0 +1,59 @@
+# Producción con Docker (operación REAL si EXCHANGE_TYPE=hyperliquid_mainnet en .env).
+# Para pruebas en papel usa docker-compose.test.yml / ./probar.sh.
+#
+# Con la MariaDB incluida (en .env: DB_PASSWORD=... y
+#   DATABASE_URL=mysql://arbibot:<DB_PASSWORD>@db:3306/arbibot):
+#     docker compose --profile db up -d --build
+#
+# Con tu propia base de datos (DATABASE_URL apuntando a ella en .env):
+#     docker compose up -d --build
+#
+# Logs:      docker compose logs -f bot
+# Detener:   docker compose down          (los datos quedan en volúmenes)
+# Dashboard: http://localhost:3001/dashboard/  (solo desde esta máquina; desde fuera usa un túnel SSH)
+
+services:
+  bot:
+    build: .
+    image: arbitrajebot:latest
+    env_file: .env
+    environment:
+      API_BIND: 0.0.0.0
+      API_PORT: "3001"
+      DATA_DIR: /app/data
+    ports:
+      # Solo localhost: no exponer la API a Internet
+      - "127.0.0.1:3001:3001"
+    volumes:
+      - botdata:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+        required: false
+    restart: unless-stopped
+    stop_grace_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  db:
+    image: mariadb:11
+    profiles: ["db"]
+    environment:
+      MARIADB_DATABASE: arbibot
+      MARIADB_USER: arbibot
+      MARIADB_PASSWORD: ${DB_PASSWORD:-}
+      MARIADB_RANDOM_ROOT_PASSWORD: "1"
+    volumes:
+      - dbdata:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mariadb-admin", "ping", "-h", "127.0.0.1", "-uarbibot", "-p${DB_PASSWORD}"]
+      interval: 5s
+      retries: 60
+    restart: unless-stopped
+
+volumes:
+  botdata:
+  dbdata:

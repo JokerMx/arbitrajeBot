@@ -26,6 +26,18 @@ impl DbConfig {
         Ok(Self { url, table_prefix })
     }
     
+    /// URL sin la contraseña, para mostrar en logs
+    pub fn redacted_url(&self) -> String {
+        match (self.url.find("://"), self.url.rfind('@')) {
+            (Some(scheme), Some(at)) if at > scheme => {
+                let creds = &self.url[scheme + 3..at];
+                let user = creds.split(':').next().unwrap_or("");
+                format!("{}{}:***{}", &self.url[..scheme + 3], user, &self.url[at..])
+            }
+            _ => self.url.clone(),
+        }
+    }
+
     pub fn table_name(&self, name: &str) -> String {
         format!("{}{}", self.table_prefix, name)
     }
@@ -42,7 +54,7 @@ impl Database {
         let config = DbConfig::from_env()?;
         let pool = MySqlPool::connect(&config.url).await?;
         
-        info!("✅ Conectado a MariaDB en: {}", config.url);
+        info!("✅ Conectado a MariaDB en: {}", config.redacted_url());
         
         Ok(Self { pool, config })
     }
@@ -158,5 +170,21 @@ impl Database {
                 false
             }
         }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::DbConfig;
+
+    fn cfg(url: &str) -> DbConfig {
+        DbConfig { url: url.to_string(), table_prefix: "BOT_".to_string() }
+    }
+
+    #[test]
+    fn password_is_hidden_in_logs() {
+        assert_eq!(cfg("mysql://bot:s3cr3t@db:3306/x").redacted_url(), "mysql://bot:***@db:3306/x");
+        // Contraseña con '@' (la URL usa el último '@' como separador del host)
+        assert_eq!(cfg("mysql://bot:a@b@db/x").redacted_url(), "mysql://bot:***@db/x");
+        assert_eq!(cfg("mysql://db/x").redacted_url(), "mysql://db/x");
     }
 }

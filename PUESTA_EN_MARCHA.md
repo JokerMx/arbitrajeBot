@@ -54,6 +54,39 @@ cargo test --release --locked          # deben pasar todos
 
 ## 4. Instalar como servicio
 
+Hay dos formas de hacerlo. Elige **una**.
+
+### Opción A: Docker (recomendada si el servidor ya tiene Docker)
+
+No necesitas instalar Rust ni Node en el servidor: todo se compila dentro de la imagen.
+
+```bash
+# En .env, además de lo anterior:
+#   con la BD incluida →  DB_PASSWORD=<clave>  y  DATABASE_URL=mysql://arbibot:<clave>@db:3306/arbibot
+#   con tu propia BD   →  DATABASE_URL apuntando a ella (no uses localhost: dentro del
+#                         contenedor "localhost" es el propio contenedor; usa la IP o host.docker.internal)
+
+docker compose --profile db up -d --build     # con la BD incluida
+# o
+docker compose up -d --build                  # con tu BD
+
+docker compose logs -f bot
+```
+
+- **Reinicio:** automático ante caídas y al reiniciar el servidor (`restart: unless-stopped`).
+- **Datos:** `subscribers.json`, los pagos y el historial de señales viven en el volumen `botdata`.
+- **Usuarios existentes:** si tienes un `subscribers.json` de antes, cópialo al volumen una sola vez:
+  ```bash
+  docker compose cp subscribers.json bot:/app/data/subscribers.json && docker compose restart bot
+  ```
+- **Actualizar:** `git pull && docker compose up -d --build`.
+- **Respaldo:**
+  ```bash
+  docker compose cp bot:/app/data ./backups/data_$(date +%F)
+  ```
+
+### Opción B: systemd (sin Docker)
+
 ```bash
 sudo cp deploy/arbitrajebot.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now arbitrajebot

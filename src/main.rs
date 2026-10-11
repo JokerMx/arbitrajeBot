@@ -333,7 +333,7 @@ async fn main() -> anyhow::Result<()> {
     info!("📊 Dashboard disponible en http://localhost:{}/dashboard", port);
     info!("📡 WebSocket disponible en ws://localhost:{}/ws", port);
     info!("📱 API Telegram en http://localhost:{}/api/telegram", port);
-    info!("🗄️ Base de datos: MariaDB en {}", db.config.url);
+    info!("🗄️ Base de datos: MariaDB en {}", db.config.redacted_url());
 
     if let ExchangeType::HyperliquidMainnet = exchange_type {
         info!("💹 OPERANDO EN MAINNET CON DINERO REAL");
