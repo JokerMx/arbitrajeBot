@@ -67,9 +67,11 @@ docker compose -f docker-compose.test.yml down -v   # borra todo lo de prueba
 # Tests unitarios (con Rust >= 1.91 instalado)
 cargo test --locked
 
-# ...o con Docker, sin instalar Rust
-docker run --rm -v "$PWD:/app" -v arbibot-target:/target -v arbibot-cargo:/usr/local/cargo/registry \
-  -e CARGO_TARGET_DIR=/target -w /app rust:1 cargo test --locked
+# ...o con Docker, sin instalar Rust (Linux / macOS)
+docker run --rm -v "$PWD:/app" -v arbibot-target:/target -v arbibot-cargo:/usr/local/cargo/registry   -e CARGO_TARGET_DIR=/target -w /app rust:1 cargo test --locked
+
+# ...en Windows con Git Bash
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/app" -v arbibot-target:/target -v arbibot-cargo:/usr/local/cargo/registry   -e CARGO_TARGET_DIR=/target -w /app rust:1 cargo test --locked
 
 # Backtests con datos públicos de Hyperliquid (Python 3, sin dependencias)
 cd tools/backtest
@@ -79,7 +81,7 @@ python portfolio.py             # simulación de una cuenta de $50 vs buy & hold
 python funding_stats.py         # funding anualizado por moneda
 ```
 
-En Windows con Git Bash, antepón `MSYS_NO_PATHCONV=1` al comando `docker run`.
+En Windows, sin `MSYS_NO_PATHCONV=1` Git Bash convierte `/app` y `/target` en rutas de Windows y el comando falla.
 
 ## Producción
 
