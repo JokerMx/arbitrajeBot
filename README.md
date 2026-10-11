@@ -14,6 +14,17 @@ Bot de trading para **Hyperliquid** escrito en Rust. Incluye un dashboard web y 
 
 No necesitas Rust instalado. Este entorno **no usa tu `.env` real**, no envía órdenes y crea su propia base de datos desechable.
 
+**Atajo, un solo comando** (Git Bash o Linux): prepara `.env.test`, compila el dashboard si cambió, levanta todo, espera a que el bot esté listo y verifica la API.
+
+```bash
+./probar.sh            # levantar y verificar
+./probar.sh logs       # seguir el log
+./probar.sh reset      # tras poner/cambiar TELEGRAM_BOT_TOKEN en .env.test
+./probar.sh stop       # detener
+```
+
+Paso a paso, si prefieres hacerlo a mano:
+
 ```bash
 # 1. Variables de prueba
 cp .env.test.example .env.test
