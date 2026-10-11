@@ -12,6 +12,8 @@
 # Detener:   docker compose down          (los datos quedan en volúmenes)
 # Dashboard: http://localhost:3001/dashboard/  (solo desde esta máquina; desde fuera usa un túnel SSH)
 
+name: arbitrajebot
+
 services:
   bot:
     build: .

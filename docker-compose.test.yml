@@ -7,6 +7,9 @@
 #
 # Dashboard: http://localhost:3001/dashboard/  (compílalo antes: cd web_dashboard && npm run build)
 
+# Nombre propio: no debe chocar con docker-compose.yml (producción)
+name: arbitrajebot-test
+
 services:
   db:
     image: mariadb:11
@@ -52,8 +55,11 @@ services:
     stop_grace_period: 30s
 
 volumes:
+  # Nombres fijos: conservan los datos creados antes de separar los proyectos
   testdb:
+    name: arbitrajebot_testdb
   testdata:
+    name: arbitrajebot_testdata
   cargo-target:
     name: arbibot-target
   cargo-registry:
