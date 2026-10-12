@@ -15,7 +15,7 @@ use rust_decimal_macros::dec;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
 
 use crate::hyperliquid::client::STOP_SLIPPAGE;
@@ -31,6 +31,16 @@ const EVAL_DELAY_MS: u64 = 20_000;
 const PAPER_COST: Decimal = dec!(0.00095);
 /// Mínimo de Hyperliquid por orden
 const MIN_ORDER_USD: Decimal = dec!(10);
+
+/// Monedas definidas en TREND_SYMBOLS (valor por defecto de la selección)
+pub fn env_symbols() -> Vec<String> {
+    std::env::var("TREND_SYMBOLS")
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().to_uppercase())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
 
 #[derive(Debug, Clone)]
 pub struct TrendConfig {
@@ -192,7 +202,8 @@ struct CoinState {
 #[derive(Clone)]
 pub struct TrendTrader {
     cfg: TrendConfig,
-    symbols: Vec<String>,
+    /// Monedas seleccionadas; compartidas con la API para cambiarlas sin reiniciar
+    symbols: Arc<RwLock<Vec<String>>>,
     client: Arc<HyperliquidClient>,
     risk_manager: Arc<Mutex<RiskManager>>,
     notifier: Arc<TelegramNotifier>,
@@ -219,7 +230,7 @@ impl TrendTrader {
         let states = symbols.iter().map(|s| (s.clone(), CoinState::default())).collect();
         Self {
             cfg,
-            symbols,
+            symbols: Arc::new(RwLock::new(symbols)),
             client,
             risk_manager,
             notifier,
@@ -237,11 +248,20 @@ impl TrendTrader {
         }
     }
 
+    pub fn symbols_handle(&self) -> Arc<RwLock<Vec<String>>> {
+        self.symbols.clone()
+    }
+
+    pub fn available_markets(&self) -> Vec<String> {
+        self.client.market_names()
+    }
+
     pub async fn start(&mut self) -> anyhow::Result<()> {
+        let symbols = self.symbols.read().await.clone();
         info!(
             "📈 Estrategia TENDENCIA ({}) en {:?}: ruptura {}h, salida {}h, stop {} ATR, riesgo {}%/op (hasta {}% al subir a $10), máx {} posiciones, máx {}x",
             if self.live { "REAL" } else { "PAPEL" },
-            self.symbols,
+            symbols,
             self.cfg.breakout_hours,
             self.cfg.exit_hours,
             self.cfg.stop_atr,
@@ -254,7 +274,7 @@ impl TrendTrader {
         if self.live {
             // Recuperar stops existentes en el exchange (reinicio del bot)
             let (_, positions) = self.client.get_account_snapshot().await?;
-            for symbol in self.symbols.clone() {
+            for symbol in symbols.clone() {
                 if !positions.contains_key(&symbol) {
                     continue;
                 }
@@ -338,7 +358,22 @@ impl TrendTrader {
         let mut open_count = 0usize;
         let mut candidates: Vec<(String, Signal)> = Vec::new();
 
-        for symbol in self.symbols.clone() {
+        // Seleccionadas + las que el bot abrió y luego se quitaron de la selección:
+        // esas se siguen gestionando (stop y salida) pero no se reabren.
+        let selected = self.symbols.read().await.clone();
+        let mut to_evaluate = selected.clone();
+        for symbol in positions.keys() {
+            let opened_by_bot = self
+                .states
+                .get(symbol)
+                .map_or(false, |st| st.stop.is_some() || st.paper.is_some());
+            if opened_by_bot && !to_evaluate.contains(symbol) {
+                info!("ℹ️ {}: ya no está seleccionada; se gestiona la posición abierta hasta cerrarla", symbol);
+                to_evaluate.push(symbol.clone());
+            }
+        }
+
+        for symbol in to_evaluate {
             let signal = match self.signal(&symbol).await {
                 Ok(Some(s)) => s,
                 Ok(None) => continue,
@@ -361,7 +396,7 @@ impl TrendTrader {
                 }
                 _ => {
                     self.clear_state(&symbol).await;
-                    if signal.is_breakout() {
+                    if signal.is_breakout() && selected.contains(&symbol) {
                         candidates.push((symbol.clone(), signal));
                     }
                 }

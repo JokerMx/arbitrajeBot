@@ -614,6 +614,103 @@ pub async fn get_signal_history(state: ApiState) -> Result<impl Reply, Rejection
     }
 }
 
+// =============================================
+// MONEDAS DE LA ESTRATEGIA DE TENDENCIA
+// =============================================
+
+const MAX_TREND_SYMBOLS: usize = 30;
+
+pub async fn get_trend_symbols(state: ApiState) -> Result<impl Reply, Rejection> {
+    let (handle, available) = {
+        let bot = state.bot.lock().await;
+        (bot.trend_symbols_handle(), bot.trend_available_markets())
+    };
+    let active = match &handle {
+        Some(h) => h.read().await.clone(),
+        None => Vec::new(),
+    };
+    let saved = match &state.config_repo {
+        Some(repo) => repo.get_trend_symbols().await.ok().flatten(),
+        None => None,
+    };
+    Ok(json(&serde_json::json!({
+        "enabled": handle.is_some(),
+        "active": active,
+        "source": if saved.is_some() { "dashboard" } else { "env" },
+        "env_default": crate::trend::env_symbols(),
+        "available": available,
+        "max": MAX_TREND_SYMBOLS,
+    })))
+}
+
+pub async fn set_trend_symbols(body: serde_json::Value, state: ApiState) -> Result<impl Reply, Rejection> {
+    let fail = |m: String| -> Result<warp::reply::Json, Rejection> {
+        Ok(json(&serde_json::json!({ "success": false, "message": m })))
+    };
+    let (handle, available) = {
+        let bot = state.bot.lock().await;
+        (bot.trend_symbols_handle(), bot.trend_available_markets())
+    };
+    let Some(handle) = handle else {
+        return fail("La estrategia de tendencia no está activa (STRATEGY_MODE)".to_string());
+    };
+    let mut symbols: Vec<String> = Vec::new();
+    for v in body["symbols"].as_array().cloned().unwrap_or_default() {
+        if let Some(s) = v.as_str() {
+            let s = s.trim().to_uppercase();
+            if !s.is_empty() && !symbols.contains(&s) {
+                symbols.push(s);
+            }
+        }
+    }
+    if symbols.is_empty() {
+        return fail("Selecciona al menos una moneda".to_string());
+    }
+    if symbols.len() > MAX_TREND_SYMBOLS {
+        return fail(format!("Máximo {} monedas", MAX_TREND_SYMBOLS));
+    }
+    let unknown: Vec<&String> = symbols.iter().filter(|s| !available.contains(s)).collect();
+    if !unknown.is_empty() {
+        return fail(format!("No existen en Hyperliquid: {:?}", unknown));
+    }
+    if let Some(repo) = &state.config_repo {
+        if let Err(e) = repo.set_trend_symbols(&symbols).await {
+            return fail(format!("Error guardando en la BD: {}", e));
+        }
+    }
+    *handle.write().await = symbols.clone();
+    info!("📈 Monedas de tendencia actualizadas desde el dashboard: {}", symbols.join(","));
+    Ok(json(&serde_json::json!({
+        "success": true,
+        "message": format!("{} monedas activas; se aplican en la próxima evaluación horaria", symbols.len()),
+        "active": symbols,
+    })))
+}
+
+pub async fn reset_trend_symbols(state: ApiState) -> Result<impl Reply, Rejection> {
+    let (handle, available) = {
+        let bot = state.bot.lock().await;
+        (bot.trend_symbols_handle(), bot.trend_available_markets())
+    };
+    if let Some(repo) = &state.config_repo {
+        let _ = repo.clear_trend_symbols().await;
+    }
+    let defaults: Vec<String> = crate::trend::env_symbols()
+        .into_iter()
+        .filter(|s| available.contains(s))
+        .collect();
+    if let Some(h) = handle {
+        if !defaults.is_empty() {
+            *h.write().await = defaults.clone();
+        }
+    }
+    Ok(json(&serde_json::json!({
+        "success": true,
+        "message": "Restablecido a TREND_SYMBOLS del .env",
+        "active": defaults,
+    })))
+}
+
 /// Rechazo por falta de token de administración
 #[derive(Debug)]
 pub struct Unauthorized;

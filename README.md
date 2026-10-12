@@ -116,7 +116,7 @@ Para actualizar: `./deploy/update.sh`. Para respaldar los datos: `./deploy/backu
 | `EXCHANGE_TYPE` | `simulated` (papel) o `hyperliquid_mainnet` (dinero real) |
 | `PRIVATE_KEY` / `WALLET` | Clave que firma (idealmente una API wallet sin permiso de retiro) y cuenta principal |
 | `STRATEGY_MODE` | `trend` (por defecto) o `market_making` |
-| `TREND_SYMBOLS` | Monedas, p. ej. `BTC,ETH,SOL`. Si se omite, usa los mercados habilitados en el dashboard |
+| `TREND_SYMBOLS` | Monedas por defecto, p. ej. `BTC,ETH,SOL`. Se pueden cambiar en vivo desde **Dashboard → Mercados**; esa selección se guarda en la BD y tiene prioridad (botón "Usar .env" para volver) |
 | `TREND_RISK_PER_TRADE` | Fracción del capital arriesgada por operación (0.005 = 0,5%; máximo 2%) |
 | `TREND_MAX_RISK_PER_TRADE` | Tope de riesgo al subir una posición chica al mínimo de $10 (por defecto 1,25%) |
 | `TREND_MAX_POSITIONS` / `TREND_MAX_LEVERAGE` | Límites de cartera |

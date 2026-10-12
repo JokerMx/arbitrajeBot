@@ -177,6 +177,22 @@ pub fn api_routes(
         .and(state_filter.clone())
         .and_then(handlers::get_signal_history);
 
+    let trend_symbols_get = warp::path!("api" / "trend" / "symbols")
+        .and(warp::get())
+        .and(state_filter.clone())
+        .and_then(handlers::get_trend_symbols);
+
+    let trend_symbols_set = warp::path!("api" / "trend" / "symbols")
+        .and(warp::put())
+        .and(warp::body::json())
+        .and(state_filter.clone())
+        .and_then(handlers::set_trend_symbols);
+
+    let trend_symbols_reset = warp::path!("api" / "trend" / "symbols")
+        .and(warp::delete())
+        .and(state_filter.clone())
+        .and_then(handlers::reset_trend_symbols);
+
     let telegram_commands = warp::path!("api" / "telegram" / "commands")
         .and(warp::get())
         .and(state_filter.clone())
@@ -266,7 +282,10 @@ pub fn api_routes(
         .or(telegram_revoke)
         .or(telegram_payments)
         .or(signal_performance)
-        .or(signal_history));
+        .or(signal_history)
+        .or(trend_symbols_get)
+        .or(trend_symbols_set)
+        .or(trend_symbols_reset));
 
     let routes = api
         .or(ws)

@@ -252,6 +252,11 @@ async fn main() -> anyhow::Result<()> {
         notifier.clone(),
         risk_manager.clone(),
         exchange_type,
+        // Selección de monedas hecha en el dashboard (si existe)
+        config_repo.get_trend_symbols().await.unwrap_or_else(|e| {
+            warn!("No se pudo leer trend_symbols de la BD: {}", e);
+            None
+        }),
     )
     .await?;
     let bot = Arc::new(Mutex::new(bot));

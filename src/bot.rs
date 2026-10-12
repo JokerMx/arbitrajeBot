@@ -18,7 +18,7 @@ use crate::executor::OrderExecutor;
 use crate::notifier::TelegramNotifier;
 use crate::executor::ExchangeType;
 use crate::hyperliquid::HyperliquidClient;
-use crate::trend::{TrendConfig, TrendTrader};
+use crate::trend::{env_symbols, TrendConfig, TrendTrader};
 
 #[derive(Clone)]
 pub struct TradingBot {
@@ -62,6 +62,7 @@ impl TradingBot {
         notifier: Arc<TelegramNotifier>,
         risk_manager: Arc<Mutex<RiskManager>>,
         exchange_type: ExchangeType,
+        trend_symbols_override: Option<Vec<String>>,
     ) -> anyhow::Result<Self> {
         info!("Inicializando TradingBot en red: {}", config.network);
         
@@ -83,17 +84,15 @@ impl TradingBot {
         let mut markets = HashMap::new();
         let mut trend = None;
         if strategy_mode == "trend" {
-            // TREND_SYMBOLS=BTC,ETH,... tiene prioridad sobre los mercados habilitados en la BD
-            let from_env: Vec<String> = std::env::var("TREND_SYMBOLS")
-                .unwrap_or_default()
-                .split(',')
-                .map(|s| s.trim().to_uppercase())
-                .filter(|s| !s.is_empty())
-                .collect();
-            let candidates: Vec<String> = if from_env.is_empty() {
-                market_configs.iter().filter(|m| m.enabled).map(|m| m.symbol.clone()).collect()
-            } else {
-                from_env
+            // Prioridad: selección del dashboard (BD) > TREND_SYMBOLS (.env) > mercados habilitados
+            let from_env = env_symbols();
+            let candidates: Vec<String> = match trend_symbols_override.filter(|s| !s.is_empty()) {
+                Some(saved) => {
+                    info!("📈 Monedas de tendencia desde el dashboard: {}", saved.join(","));
+                    saved
+                }
+                None if !from_env.is_empty() => from_env,
+                None => market_configs.iter().filter(|m| m.enabled).map(|m| m.symbol.clone()).collect(),
             };
             let symbols: Vec<String> = candidates
                 .into_iter()
@@ -163,6 +162,15 @@ impl TradingBot {
             notifier,
             _config: config,
         })
+    }
+
+    /// Lista compartida de monedas de la estrategia de tendencia (None si no está activa)
+    pub fn trend_symbols_handle(&self) -> Option<Arc<tokio::sync::RwLock<Vec<String>>>> {
+        self.trend.as_ref().map(|t| t.symbols_handle())
+    }
+
+    pub fn trend_available_markets(&self) -> Vec<String> {
+        self.trend.as_ref().map(|t| t.available_markets()).unwrap_or_default()
     }
 
     pub async fn start(&mut self) -> anyhow::Result<()> {

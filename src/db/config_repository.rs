@@ -261,6 +261,48 @@ impl ConfigRepository {
         }
     }
     
+    /// Monedas de la estrategia de tendencia elegidas en el dashboard.
+    /// `None` = no hay selección guardada (se usa TREND_SYMBOLS del .env).
+    pub async fn get_trend_symbols(&self) -> Result<Option<Vec<String>>> {
+        let table = format!("{}config", self.table_prefix);
+        let row = sqlx::query(&format!(
+            r#"SELECT config_value FROM `{}` WHERE config_key = 'trend_symbols'"#,
+            table
+        ))
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| {
+            let value: String = r.get(0);
+            value
+                .split(',')
+                .map(|s| s.trim().to_uppercase())
+                .filter(|s| !s.is_empty())
+                .collect()
+        }))
+    }
+
+    pub async fn set_trend_symbols(&self, symbols: &[String]) -> Result<()> {
+        let table = format!("{}config", self.table_prefix);
+        sqlx::query(&format!(
+            r#"INSERT INTO `{}` (config_key, config_value, config_type) VALUES ('trend_symbols', ?, 'list')
+               ON DUPLICATE KEY UPDATE config_value = VALUES(config_value)"#,
+            table
+        ))
+        .bind(symbols.join(","))
+        .execute(&self.pool)
+        .await?;
+        info!("📈 Monedas de tendencia guardadas: {}", symbols.join(","));
+        Ok(())
+    }
+
+    pub async fn clear_trend_symbols(&self) -> Result<()> {
+        let table = format!("{}config", self.table_prefix);
+        sqlx::query(&format!(r#"DELETE FROM `{}` WHERE config_key = 'trend_symbols'"#, table))
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     /// Actualizar capital inicial
     pub async fn update_initial_capital(&self, capital: Decimal) -> Result<()> {
         let table = format!("{}config", self.table_prefix);

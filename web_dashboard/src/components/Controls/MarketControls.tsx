@@ -61,7 +61,12 @@ export const MarketControls: React.FC = () => {
   return (
     <div className="bg-dark-200 rounded-xl p-6 border border-dark-300">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-semibold">Mercados</h3>
+        <div>
+          <h3 className="text-lg font-semibold">Mercados (market making)</h3>
+          <p className="text-xs text-gray-400 mt-1">
+            Solo aplican con STRATEGY_MODE=market_making. La estrategia de tendencia usa el panel de arriba.
+          </p>
+        </div>
         <Coins className="w-5 h-5 text-warning" />
       </div>
 

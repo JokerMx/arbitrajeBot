@@ -8,6 +8,7 @@ import { TradesTable } from "./components/Dashboard/TradesTable";
 import { StrategyControls } from "./components/Controls/StrategyControls";
 import { RiskControls } from "./components/Controls/RiskControls";
 import { MarketControls } from "./components/Controls/MarketControls";
+import { TrendSymbols } from "./components/Controls/TrendSymbols";
 import { SystemSettings } from "./components/Controls/SystemSettings";
 import { TelegramSettings } from "./components/Controls/TelegramSettings";
 import { LeverageControls } from "./components/Controls/LeverageControls";
@@ -274,6 +275,7 @@ const MarketsView: React.FC = () => {
   return (
     <div className="space-y-6">
       <h2 className="text-2xl font-bold">Configuración de Mercados</h2>
+      <TrendSymbols />
       <div className="bg-dark-200 rounded-xl p-6 border border-dark-300">
         <MarketControls />
       </div>

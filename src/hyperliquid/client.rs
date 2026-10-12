@@ -83,6 +83,13 @@ impl HyperliquidClient {
         })
     }
 
+    /// Nombres de todos los perpetuos de Hyperliquid, ordenados
+    pub fn market_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.cached_markets.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
     pub fn get_market_info(&self, symbol: &str) -> Option<&MarketInfo> {
         self.cached_markets.get(symbol)
     }
