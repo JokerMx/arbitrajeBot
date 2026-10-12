@@ -225,33 +225,39 @@ impl TradingBot {
 
     async fn monitoring_loop(risk_manager: Arc<Mutex<RiskManager>>, notifier: Arc<TelegramNotifier>) {
         let mut interval = time::interval(time::Duration::from_secs(30));
-        
+        // El resumen va al log cada 30 min (60 ciclos); antes llenaba el log cada 30 s
+        const LOG_EVERY_TICKS: u64 = 60;
+        let mut tick: u64 = 0;
+
         loop {
             interval.tick().await;
-            
+            tick += 1;
+
             let risk = risk_manager.lock().await;
             let balance = risk.current_balance().to_f64().unwrap_or(0.0);
             let pnl = risk.total_pnl().to_f64().unwrap_or(0.0);
             let win_rate = risk.win_rate();
             let drawdown = risk.current_drawdown().to_f64().unwrap_or(0.0);
             
-            info!("📊 === ESTADO DEL BOT ===");
-            info!("💰 Balance: ${:.2}", risk.current_balance());
-            info!("📈 P&L: ${:.2}", risk.total_pnl());
-            info!("📉 Drawdown: {:.2}%", risk.current_drawdown() * dec!(100));
-            info!("🎯 Win Rate: {:.1}%", risk.win_rate() * 100.0);
-            info!("📊 Volumen: ${:.2}", risk.total_volume());
-            info!("⚠️ Estado riesgo: {:?}", risk.status());
-            
-            let recent = risk.recent_trades(3);
-            if !recent.is_empty() {
-                info!("🔄 Últimos trades:");
-                for trade in recent {
-                    info!("   {} {} {} @ ${:.2} (P&L: ${:.2})", 
-                          trade.side, trade.size, trade.symbol, trade.price, trade.pnl);
+            if tick % LOG_EVERY_TICKS == 1 {
+                info!("📊 === ESTADO DEL BOT ===");
+                info!("💰 Balance: ${:.2}", risk.current_balance());
+                info!("📈 P&L: ${:.2}", risk.total_pnl());
+                info!("📉 Drawdown: {:.2}%", risk.current_drawdown() * dec!(100));
+                info!("🎯 Win Rate: {:.1}%", risk.win_rate() * 100.0);
+                info!("📊 Volumen: ${:.2}", risk.total_volume());
+                info!("⚠️ Estado riesgo: {:?}", risk.status());
+
+                let recent = risk.recent_trades(3);
+                if !recent.is_empty() {
+                    info!("🔄 Últimos trades:");
+                    for trade in recent {
+                        info!("   {} {} {} @ ${:.2} (P&L: ${:.2})", 
+                              trade.side, trade.size, trade.symbol, trade.price, trade.pnl);
+                    }
                 }
             }
-            
+
             drop(risk);
             
             if notifier.should_notify_status().await {

@@ -43,6 +43,10 @@ pub struct TrendConfig {
     pub stop_atr: Decimal,
     /// Fracción del equity arriesgada por operación (0.01 = 1%)
     pub risk_per_trade: Decimal,
+    /// Riesgo máximo aceptado al subir una posición pequeña al mínimo de $10.
+    /// Con cuentas chicas las monedas volátiles salen bajo el mínimo; si al abrir
+    /// $10 el riesgo real no pasa de este tope, se opera igual.
+    pub max_risk_per_trade: Decimal,
     /// Nocional total máximo / equity
     pub max_total_leverage: Decimal,
     pub max_positions: usize,
@@ -59,6 +63,7 @@ impl Default for TrendConfig {
             stop_atr: dec!(3),
             // Backtest: 0.5% -> DD máx ~7%; 1% -> DD ~20%; 2% -> DD ~44% (no usar)
             risk_per_trade: dec!(0.01),
+            max_risk_per_trade: dec!(0.0125),
             max_total_leverage: dec!(3),
             max_positions: 4,
             entry_slippage: dec!(0.005),
@@ -79,19 +84,51 @@ impl TrendConfig {
             atr_period: d.atr_period,
             stop_atr: var("TREND_STOP_ATR").unwrap_or(d.stop_atr),
             risk_per_trade: var("TREND_RISK_PER_TRADE").unwrap_or(d.risk_per_trade),
+            max_risk_per_trade: var("TREND_MAX_RISK_PER_TRADE").unwrap_or(d.max_risk_per_trade),
             max_total_leverage: var("TREND_MAX_LEVERAGE").unwrap_or(d.max_total_leverage),
             max_positions: var("TREND_MAX_POSITIONS").unwrap_or(d.max_positions),
             entry_slippage: d.entry_slippage,
         };
         // Límites de seguridad: el backtest mostró caídas de ~44% con 2% de riesgo
+        let risk_per_trade = cfg.risk_per_trade.max(dec!(0.001)).min(dec!(0.02));
         Self {
-            risk_per_trade: cfg.risk_per_trade.max(dec!(0.001)).min(dec!(0.02)),
+            risk_per_trade,
+            // Nunca menor que el riesgo normal ni mayor que 2%
+            max_risk_per_trade: cfg.max_risk_per_trade.max(risk_per_trade).min(dec!(0.02)),
             max_total_leverage: cfg.max_total_leverage.max(Decimal::ONE).min(dec!(5)),
             max_positions: cfg.max_positions.clamp(1, 10),
             breakout_hours: cfg.breakout_hours.clamp(24, 1000),
             exit_hours: cfg.exit_hours.clamp(6, 500),
             ..cfg
         }
+    }
+}
+
+/// Nocional de una entrada, o `None` si no se puede operar.
+/// - `stop_frac`: distancia al stop como fracción del precio.
+/// - `room`: nocional disponible bajo el tope de apalancamiento.
+/// Si el tamaño por riesgo queda bajo el mínimo del exchange, se usa el mínimo
+/// siempre que su riesgo real no supere `max_risk` y quepa en `room`.
+fn entry_notional(
+    equity: Decimal,
+    risk: Decimal,
+    max_risk: Decimal,
+    stop_frac: Decimal,
+    room: Decimal,
+) -> Option<Decimal> {
+    if stop_frac <= Decimal::ZERO || equity <= Decimal::ZERO {
+        return None;
+    }
+    let by_risk = equity * risk / stop_frac;
+    let notional = by_risk.min(room);
+    if notional >= MIN_ORDER_USD {
+        return Some(notional);
+    }
+    let risk_at_min = MIN_ORDER_USD * stop_frac;
+    if room >= MIN_ORDER_USD && risk_at_min <= equity * max_risk {
+        Some(MIN_ORDER_USD)
+    } else {
+        None
     }
 }
 
@@ -202,13 +239,14 @@ impl TrendTrader {
 
     pub async fn start(&mut self) -> anyhow::Result<()> {
         info!(
-            "📈 Estrategia TENDENCIA ({}) en {:?}: ruptura {}h, salida {}h, stop {} ATR, riesgo {}%/op, máx {} posiciones, máx {}x",
+            "📈 Estrategia TENDENCIA ({}) en {:?}: ruptura {}h, salida {}h, stop {} ATR, riesgo {}%/op (hasta {}% al subir a $10), máx {} posiciones, máx {}x",
             if self.live { "REAL" } else { "PAPEL" },
             self.symbols,
             self.cfg.breakout_hours,
             self.cfg.exit_hours,
             self.cfg.stop_atr,
             self.cfg.risk_per_trade * dec!(100),
+            self.cfg.max_risk_per_trade * dec!(100),
             self.cfg.max_positions,
             self.cfg.max_total_leverage
         );
@@ -430,15 +468,36 @@ impl TrendTrader {
         if dist <= Decimal::ZERO || sig.close <= Decimal::ZERO {
             return None;
         }
-        let by_risk = equity * self.cfg.risk_per_trade / (dist / sig.close);
+        let stop_frac = dist / sig.close;
         let room = equity * self.cfg.max_total_leverage - used;
-        let notional = by_risk.min(room);
-        if notional < MIN_ORDER_USD {
+        let notional = match entry_notional(
+            equity,
+            self.cfg.risk_per_trade,
+            self.cfg.max_risk_per_trade,
+            stop_frac,
+            room,
+        ) {
+            Some(n) => n,
+            None => {
+                info!(
+                    "⏸️ {}: ruptura sin tamaño suficiente (stop a {:.2}%: $10 arriesgaría {:.2}% > máx {}%; cupo ${:.2})",
+                    symbol,
+                    stop_frac * dec!(100),
+                    MIN_ORDER_USD * stop_frac / equity * dec!(100),
+                    self.cfg.max_risk_per_trade * dec!(100),
+                    room
+                );
+                return None;
+            }
+        };
+        let real_risk = notional * stop_frac / equity;
+        if real_risk > self.cfg.risk_per_trade + dec!(0.00001) {
             info!(
-                "⏸️ {}: ruptura sin tamaño suficiente (${:.2} < $10; riesgo ${:.2}, cupo ${:.2})",
-                symbol, notional, by_risk, room
+                "↗️ {}: posición subida al mínimo de $10 (riesgo real {:.2}% en vez de {}%)",
+                symbol,
+                real_risk * dec!(100),
+                self.cfg.risk_per_trade * dec!(100)
             );
-            return None;
         }
         let size = notional / sig.close;
         let stop = sig.close - dist;
@@ -782,6 +841,24 @@ mod tests {
         cs.pop();
         cs.push(candle(20, 101.0, 99.5, 100.5));
         assert!(!compute_signal(&cs, &cfg).unwrap().is_breakout());
+    }
+
+    #[test]
+    fn small_positions_are_raised_to_minimum_within_max_risk() {
+        let eq = dec!(50);
+        // BTC: stop 0.83% -> por riesgo $30, sin ajuste
+        assert_eq!(
+            entry_notional(eq, dec!(0.005), dec!(0.0125), dec!(0.0083), dec!(150)).unwrap().round_dp(2),
+            dec!(30.12)
+        );
+        // NEAR: stop 6.13% -> por riesgo $4.08; con $10 arriesga 1.23% <= 1.25% -> $10
+        assert_eq!(entry_notional(eq, dec!(0.005), dec!(0.0125), dec!(0.0613), dec!(150)), Some(dec!(10)));
+        // Stop 7%: $10 arriesgaría 1.4% > 1.25% -> no se opera
+        assert_eq!(entry_notional(eq, dec!(0.005), dec!(0.0125), dec!(0.07), dec!(150)), None);
+        // Sin cupo de apalancamiento para $10 -> no se opera
+        assert_eq!(entry_notional(eq, dec!(0.005), dec!(0.0125), dec!(0.0613), dec!(8)), None);
+        // max_risk == risk: comportamiento anterior (se omite)
+        assert_eq!(entry_notional(eq, dec!(0.005), dec!(0.005), dec!(0.0613), dec!(150)), None);
     }
 
     #[test]

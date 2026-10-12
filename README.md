@@ -118,6 +118,7 @@ Para actualizar: `./deploy/update.sh`. Para respaldar los datos: `./deploy/backu
 | `STRATEGY_MODE` | `trend` (por defecto) o `market_making` |
 | `TREND_SYMBOLS` | Monedas, p. ej. `BTC,ETH,SOL`. Si se omite, usa los mercados habilitados en el dashboard |
 | `TREND_RISK_PER_TRADE` | Fracción del capital arriesgada por operación (0.005 = 0,5%; máximo 2%) |
+| `TREND_MAX_RISK_PER_TRADE` | Tope de riesgo al subir una posición chica al mínimo de $10 (por defecto 1,25%) |
 | `TREND_MAX_POSITIONS` / `TREND_MAX_LEVERAGE` | Límites de cartera |
 | `ADMIN_API_TOKEN` | Token de la API y del dashboard. **Obligatorio en producción** |
 | `API_BIND` / `API_PORT` | Dirección y puerto de la API (`127.0.0.1:3001` por defecto) |

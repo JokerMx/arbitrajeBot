@@ -136,13 +136,14 @@ async fn handle_websocket(ws: WebSocket, state: ApiState) {
                 history,
             };
             
-            info!("📊 ENVIANDO STATS - Balance: ${:.2}, WinRate: {:.1}%, Posiciones: {}", 
+            debug!("📊 ENVIANDO STATS - Balance: ${:.2}, WinRate: {:.1}%, Posiciones: {}", 
                   stats.balance, stats.win_rate, stats.positions.len());
             
             match serde_json::to_string(&WebSocketMessage::Stats(stats)) {
                 Ok(json) => {
                     if stats_tx.send(json).is_err() {
-                        error!("❌ Canal de stats cerrado");
+                        // El cliente cerró el dashboard: normal
+                        debug!("Canal de stats cerrado (cliente desconectado)");
                         break;
                     }
                 }
