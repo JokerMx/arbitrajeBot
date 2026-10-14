@@ -22,7 +22,7 @@ use tracing::{debug, error, info, warn};
 use crate::bot::TradingBot;
 use crate::notifier::TelegramNotifier;
 use crate::risk::RiskManager;
-use crate::signals::{Performance, SignalEvent, SignalHistory, SignalRecord, DISCLAIMER};
+use crate::signals::{Performance, SignalEvent, SignalHistory, SignalRecord, DISCLAIMER, STRATEGY_REBOUND, STRATEGY_TREND};
 
 /// Duración de una suscripción de Telegram Stars (fija por Telegram: 30 días)
 const STARS_SUBSCRIPTION_PERIOD_SECS: i64 = 2_592_000;
@@ -361,6 +361,32 @@ impl TelegramBot {
         self.history.lock().await.performance()
     }
 
+    /// Rendimiento separado por estrategia (para el dashboard)
+    pub async fn get_performance_by_strategy(&self) -> (Performance, Performance) {
+        let h = self.history.lock().await;
+        (h.performance_for(Some(STRATEGY_TREND)), h.performance_for(Some(STRATEGY_REBOUND)))
+    }
+
+    /// Texto de /performance: total y luego cada estrategia
+    async fn performance_text(&self) -> String {
+        let h = self.history.lock().await;
+        let all = h.performance();
+        if all.closed == 0 && all.open == 0 {
+            return all.format();
+        }
+        format!(
+            "{}
+{}
+{}",
+            all.format().replace(&format!("
+
+{}", DISCLAIMER), ""),
+            h.performance_for(Some(STRATEGY_TREND)).format_section("🚀 Tendencia"),
+            h.performance_for(Some(STRATEGY_REBOUND)).format_section("🔄 Rebote")
+        ) + "
+" + DISCLAIMER
+    }
+
     pub async fn get_signals(&self, limit: usize) -> Vec<SignalRecord> {
         let h = self.history.lock().await;
         h.records.iter().rev().take(limit).cloned().collect()
@@ -525,9 +551,16 @@ impl TelegramBot {
 
     async fn api(&self, method: &str, payload: &serde_json::Value) -> Result<serde_json::Value, (u16, String)> {
         let url = format!("https://api.telegram.org/bot{}/{}", self.bot_token, method);
-        let resp = self.client.post(&url).json(payload).send().await.map_err(|e| (0, e.to_string()))?;
+        // without_url: la URL incluye el token del bot y no debe aparecer en errores ni logs
+        let resp = self
+            .client
+            .post(&url)
+            .json(payload)
+            .send()
+            .await
+            .map_err(|e| (0, e.without_url().to_string()))?;
         let status = resp.status().as_u16();
-        let body: serde_json::Value = resp.json().await.map_err(|e| (status, e.to_string()))?;
+        let body: serde_json::Value = resp.json().await.map_err(|e| (status, e.without_url().to_string()))?;
         if body["ok"].as_bool() == Some(true) {
             Ok(body["result"].clone())
         } else {
@@ -1191,7 +1224,7 @@ impl TelegramBot {
             "/trial" | "/prueba" => self.cmd_trial(&user).await,
             "/plan" | "/miplan" => self.cmd_plan(&user).await,
             "/signals" | "/senales" => self.cmd_signals(&user).await,
-            "/performance" | "/resultados" => self.get_performance().await.format(),
+            "/performance" | "/resultados" => self.performance_text().await,
             "/referral" | "/referidos" => self.cmd_referral(&user).await,
             "/terms" | "/terminos" => self.cmd_terms(),
             "/paysupport" => format!(

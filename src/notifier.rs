@@ -170,7 +170,8 @@ impl TelegramNotifier {
                     }
                 }
                 Err(e) => {
-                    error!("❌ Error de conexión a Telegram: {}", e);
+                    // without_url: la URL incluye el token del bot y no debe quedar en logs
+                    error!("❌ Error de conexión a Telegram: {}", e.without_url());
                     retries += 1;
                     let wait_time = 1000 * 2u64.pow(retries);
                     tokio::time::sleep(tokio::time::Duration::from_millis(wait_time)).await;
