@@ -18,7 +18,7 @@ use crate::executor::OrderExecutor;
 use crate::notifier::TelegramNotifier;
 use crate::executor::ExchangeType;
 use crate::hyperliquid::HyperliquidClient;
-use crate::trend::{env_symbols, TrendConfig, TrendTrader};
+use crate::trend::{env_symbols, ReboundConfig, TrendConfig, TrendTrader};
 
 #[derive(Clone)]
 pub struct TradingBot {
@@ -120,6 +120,7 @@ impl TradingBot {
                 live,
                 !is_testnet,
                 initial_capital,
+                ReboundConfig::from_env(),
             ));
         }
 

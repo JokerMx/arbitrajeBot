@@ -2,6 +2,7 @@
 
 Bot de trading para **Hyperliquid** escrito en Rust. Incluye un dashboard web y un bot de Telegram que vende **señales Premium** cobradas con Telegram Stars.
 
+- **Estrategia complementaria "rebote":** compra monedas en sobreventa extrema (RSI 1h < 20) y vende al rebotar o a las 48 h. Da actividad en mercados bajistas; corre en papel salvo `REBOUND_LIVE=true`.
 - **Estrategia por defecto:** seguimiento de tendencia en velas de 1h. Entra cuando el precio rompe el máximo de 7 días, solo en largo, con un stop de 3 ATR que sube con el precio y vive en el propio exchange. Arriesga un porcentaje fijo del capital por operación. El market making sigue disponible (`STRATEGY_MODE=market_making`), aunque en los backtests no mostró ventaja.
 - **Modo papel:** si `EXCHANGE_TYPE` no es `hyperliquid_mainnet`, el bot calcula las mismas señales con datos reales pero no envía órdenes.
 - **Telegram:** los usuarios Free reciben un aviso inmediato y el detalle con retraso. Premium recibe la señal al instante. Incluye prueba gratis, referidos, historial de resultados y panel de administración.
@@ -120,6 +121,8 @@ Para actualizar: `./deploy/update.sh`. Para respaldar los datos: `./deploy/backu
 | `TREND_RISK_PER_TRADE` | Fracción del capital arriesgada por operación (0.005 = 0,5%; máximo 2%) |
 | `TREND_MAX_RISK_PER_TRADE` | Tope de riesgo al subir una posición chica al mínimo de $10 (por defecto 1,25%) |
 | `TREND_MAX_POSITIONS` / `TREND_MAX_LEVERAGE` | Límites de cartera |
+| `REBOUND_ENABLED` / `REBOUND_LIVE` | Estrategia complementaria de rebote (compra en sobreventa, RSI < 20). Por defecto activa y **en papel** aunque el bot opere real |
+| `REBOUND_RISK_PER_TRADE`, `REBOUND_MAX_POSITIONS` | Riesgo (0,5%) y posiciones máximas (2) del rebote |
 | `ADMIN_API_TOKEN` | Token de la API y del dashboard. **Obligatorio en producción** |
 | `API_BIND` / `API_PORT` | Dirección y puerto de la API (`127.0.0.1:3001` por defecto) |
 | `DATA_DIR` | Carpeta de `subscribers.json`, `payments.json` y `signals_history.json` |

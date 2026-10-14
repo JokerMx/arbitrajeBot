@@ -602,8 +602,15 @@ pub async fn get_telegram_payments(state: ApiState) -> Result<impl Reply, Reject
 
 pub async fn get_signal_performance(state: ApiState) -> Result<impl Reply, Rejection> {
     match &state.telegram_bot {
-        Some(bot) => Ok(json(&bot.get_performance().await)),
-        None => Ok(json(&crate::signals::Performance::default())),
+        Some(bot) => {
+            let all = bot.get_performance().await;
+            let (trend, rebound) = bot.get_performance_by_strategy().await;
+            // Mismos campos de siempre + desglose por estrategia
+            let mut v = serde_json::to_value(&all).unwrap_or_default();
+            v["by_strategy"] = serde_json::json!({ "tendencia": trend, "rebote": rebound });
+            Ok(json(&v))
+        }
+        None => Ok(json(&serde_json::to_value(crate::signals::Performance::default()).unwrap_or_default())),
     }
 }
 

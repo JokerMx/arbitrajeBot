@@ -12,7 +12,7 @@
 
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
@@ -22,7 +22,7 @@ use crate::hyperliquid::client::STOP_SLIPPAGE;
 use crate::hyperliquid::{HyperliquidClient, HyperliquidOrderSide};
 use crate::notifier::TelegramNotifier;
 use crate::risk::RiskManager;
-use crate::signals::SignalEvent;
+use crate::signals::{SignalEvent, STRATEGY_REBOUND, STRATEGY_TREND};
 
 const HOUR_MS: u64 = 3_600_000;
 /// Espera tras el cierre de la vela antes de evaluar (la API tarda en publicarla)
@@ -142,6 +142,71 @@ fn entry_notional(
     }
 }
 
+/// Estrategia complementaria "rebote": compra una moneda en sobreventa extrema
+/// (RSI 1h < 20) y vende al rebotar (RSI > 50) o tras 48 h. Validada en
+/// tools/backtest/dips.py (positiva en ambas mitades, pero con pocas operaciones):
+/// por eso corre en papel salvo REBOUND_LIVE=true.
+#[derive(Debug, Clone)]
+pub struct ReboundConfig {
+    pub enabled: bool,
+    /// Operar con dinero real (solo si además el bot está en hyperliquid_mainnet)
+    pub live: bool,
+    pub entry_rsi: Decimal,
+    pub exit_rsi: Decimal,
+    pub max_hold_hours: u64,
+    pub stop_atr: Decimal,
+    pub risk_per_trade: Decimal,
+    pub max_positions: usize,
+}
+
+impl Default for ReboundConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            live: false,
+            entry_rsi: dec!(20),
+            exit_rsi: dec!(50),
+            max_hold_hours: 48,
+            stop_atr: dec!(3),
+            risk_per_trade: dec!(0.005),
+            max_positions: 2,
+        }
+    }
+}
+
+impl ReboundConfig {
+    pub fn from_env() -> Self {
+        fn var<T: std::str::FromStr>(key: &str) -> Option<T> {
+            std::env::var(key).ok().and_then(|v| v.trim().parse().ok())
+        }
+        let d = Self::default();
+        Self {
+            enabled: var("REBOUND_ENABLED").unwrap_or(d.enabled),
+            live: var("REBOUND_LIVE").unwrap_or(d.live),
+            entry_rsi: var::<Decimal>("REBOUND_ENTRY_RSI").unwrap_or(d.entry_rsi).max(dec!(5)).min(dec!(40)),
+            exit_rsi: var::<Decimal>("REBOUND_EXIT_RSI").unwrap_or(d.exit_rsi).max(dec!(30)).min(dec!(80)),
+            max_hold_hours: var::<u64>("REBOUND_MAX_HOLD_HOURS").unwrap_or(d.max_hold_hours).clamp(4, 240),
+            stop_atr: d.stop_atr,
+            risk_per_trade: var::<Decimal>("REBOUND_RISK_PER_TRADE")
+                .unwrap_or(d.risk_per_trade)
+                .max(dec!(0.001))
+                .min(dec!(0.02)),
+            max_positions: var::<usize>("REBOUND_MAX_POSITIONS").unwrap_or(d.max_positions).clamp(0, 5),
+        }
+    }
+}
+
+/// Posición de la estrategia de rebote (se guarda en DATA_DIR/rebound_positions.json)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ReboundPosition {
+    size: Decimal,
+    entry: Decimal,
+    stop: Decimal,
+    opened_ms: u64,
+    paper: bool,
+    stop_oid: Option<u64>,
+}
+
 #[derive(Debug, Clone)]
 struct Candle {
     t: u64,
@@ -167,6 +232,8 @@ struct Signal {
     atr: Decimal,
     breakout_high: Decimal,
     exit_low: Decimal,
+    /// RSI(14) de Wilder sobre los cierres de 1h
+    rsi: Decimal,
 }
 
 impl Signal {
@@ -214,6 +281,9 @@ pub struct TrendTrader {
     last_eval_hour: u64,
     paper_equity: Decimal,
     halted: bool,
+    rebound_cfg: ReboundConfig,
+    rebound: HashMap<String, ReboundPosition>,
+    rebound_file: std::path::PathBuf,
 }
 
 impl TrendTrader {
@@ -226,8 +296,20 @@ impl TrendTrader {
         live: bool,
         mainnet: bool,
         initial_capital: Decimal,
+        rebound_cfg: ReboundConfig,
     ) -> Self {
         let states = symbols.iter().map(|s| (s.clone(), CoinState::default())).collect();
+        let data_dir = std::env::var("DATA_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
+        let rebound_file = data_dir.join("rebound_positions.json");
+        let rebound: HashMap<String, ReboundPosition> = std::fs::read_to_string(&rebound_file)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+        if !rebound.is_empty() {
+            info!("♻️ Rebote: {} posiciones recuperadas de {:?}", rebound.len(), rebound_file);
+        }
         Self {
             cfg,
             symbols: Arc::new(RwLock::new(symbols)),
@@ -245,6 +327,9 @@ impl TrendTrader {
             last_eval_hour: 0,
             paper_equity: initial_capital,
             halted: false,
+            rebound_cfg,
+            rebound,
+            rebound_file,
         }
     }
 
@@ -270,6 +355,19 @@ impl TrendTrader {
             self.cfg.max_positions,
             self.cfg.max_total_leverage
         );
+
+        if self.rebound_cfg.enabled {
+            info!(
+                "🔄 Estrategia REBOTE ({}): compra con RSI < {}, vende con RSI > {} o a las {} h, stop {} ATR, riesgo {}%/op, máx {} posiciones",
+                if self.rebound_is_live() { "REAL" } else { "PAPEL" },
+                self.rebound_cfg.entry_rsi,
+                self.rebound_cfg.exit_rsi,
+                self.rebound_cfg.max_hold_hours,
+                self.rebound_cfg.stop_atr,
+                self.rebound_cfg.risk_per_trade * dec!(100),
+                self.rebound_cfg.max_positions
+            );
+        }
 
         if self.live {
             // Recuperar stops existentes en el exchange (reinicio del bot)
@@ -304,6 +402,7 @@ impl TrendTrader {
         if !self.live {
             self.check_paper_stops().await;
         }
+        self.check_rebound_paper_stops().await;
         let now = now_ms();
         let hour = now / HOUR_MS;
         if hour != self.last_eval_hour && now % HOUR_MS >= EVAL_DELAY_MS {
@@ -357,6 +456,7 @@ impl TrendTrader {
         let mut used_notional = Decimal::ZERO;
         let mut open_count = 0usize;
         let mut candidates: Vec<(String, Signal)> = Vec::new();
+        let mut signals: HashMap<String, Signal> = HashMap::new();
 
         // Seleccionadas + las que el bot abrió y luego se quitaron de la selección:
         // esas se siguen gestionando (stop y salida) pero no se reabren.
@@ -373,6 +473,13 @@ impl TrendTrader {
             }
         }
 
+        // Monedas con posición de rebote: también se evalúan para gestionar su salida
+        for symbol in self.rebound.keys() {
+            if !to_evaluate.contains(symbol) {
+                to_evaluate.push(symbol.clone());
+            }
+        }
+
         for symbol in to_evaluate {
             let signal = match self.signal(&symbol).await {
                 Ok(Some(s)) => s,
@@ -382,6 +489,13 @@ impl TrendTrader {
                     continue;
                 }
             };
+            signals.insert(symbol.clone(), signal.clone());
+
+            // Las posiciones de rebote las gestiona evaluate_rebound, no la tendencia
+            if let Some(rb) = self.rebound.get(&symbol) {
+                used_notional += rb.size * signal.close;
+                continue;
+            }
 
             match positions.get(&symbol) {
                 Some(&(size, entry)) if size > Decimal::ZERO => {
@@ -396,7 +510,7 @@ impl TrendTrader {
                 }
                 _ => {
                     self.clear_state(&symbol).await;
-                    if signal.is_breakout() && selected.contains(&symbol) {
+                    if signal.is_breakout() && selected.contains(&symbol) && !self.rebound.contains_key(&symbol) {
                         candidates.push((symbol.clone(), signal));
                     }
                 }
@@ -416,10 +530,24 @@ impl TrendTrader {
             }
         }
 
+        // 5. Estrategia de rebote (salidas y entradas)
+        if self.rebound_cfg.enabled {
+            let trend_held: Vec<String> = positions
+                .iter()
+                .filter(|(s, (size, _))| !size.is_zero() && !self.rebound.contains_key(*s))
+                .map(|(s, _)| s.clone())
+                .chain(self.states.iter().filter(|(_, st)| st.paper.is_some()).map(|(s, _)| s.clone()))
+                .collect();
+            used_notional = self
+                .evaluate_rebound(&signals, &selected, &trend_held, &positions, equity, used_notional)
+                .await;
+        }
+
         info!(
-            "📊 Tendencia: equity ${:.2}, {} posiciones, nocional ${:.2} ({:.2}x)",
+            "📊 Tendencia: equity ${:.2}, {} posiciones (+{} rebote), nocional ${:.2} ({:.2}x)",
             equity,
             open_count,
+            self.rebound.len(),
             used_notional,
             if equity > Decimal::ZERO { used_notional / equity } else { Decimal::ZERO }
         );
@@ -563,6 +691,7 @@ impl TrendTrader {
                 price: entry,
                 stop: entry - dist,
                 paper: true,
+                strategy: STRATEGY_TREND.into(),
             });
             return Some(notional);
         }
@@ -612,6 +741,7 @@ impl TrendTrader {
                     price: entry,
                     stop,
                     paper: false,
+                    strategy: STRATEGY_TREND.into(),
                 });
             }
             Err(e) => {
@@ -645,6 +775,7 @@ impl TrendTrader {
                             initial_stop: state.initial_stop,
                             reason: reason.to_string(),
                             paper: false,
+                            strategy: STRATEGY_TREND.into(),
                         });
                     }
                 }
@@ -677,6 +808,7 @@ impl TrendTrader {
                         initial_stop: st.initial_stop,
                         reason: "stop".to_string(),
                         paper: false,
+                        strategy: STRATEGY_TREND.into(),
                     });
                 }
             }
@@ -746,7 +878,250 @@ impl TrendTrader {
             initial_stop,
             reason: reason.to_string(),
             paper: true,
+            strategy: STRATEGY_TREND.into(),
         });
+    }
+
+    // ------------------------------------------------------------------
+    // Estrategia de rebote
+    // ------------------------------------------------------------------
+
+    /// El rebote opera con dinero real solo si el bot es real Y REBOUND_LIVE=true
+    fn rebound_is_live(&self) -> bool {
+        self.live && self.rebound_cfg.live
+    }
+
+    fn save_rebound(&self) {
+        match serde_json::to_string_pretty(&self.rebound) {
+            Ok(s) => {
+                if let Err(e) = std::fs::write(&self.rebound_file, s) {
+                    error!("❌ No se pudo guardar {:?}: {}", self.rebound_file, e);
+                }
+            }
+            Err(e) => error!("❌ Error serializando posiciones de rebote: {}", e),
+        }
+    }
+
+    /// Gestiona salidas y entradas del rebote. Devuelve el nocional total actualizado.
+    async fn evaluate_rebound(
+        &mut self,
+        signals: &HashMap<String, Signal>,
+        selected: &[String],
+        trend_held: &[String],
+        exchange_positions: &HashMap<String, (Decimal, Decimal)>,
+        equity: Decimal,
+        mut used_notional: Decimal,
+    ) -> Decimal {
+        let now = now_ms();
+
+        // 1. Salidas
+        for (symbol, pos) in self.rebound.clone() {
+            // Real: si la posición ya no está en el exchange, saltó el stop
+            if !pos.paper && !exchange_positions.contains_key(&symbol) {
+                info!("ℹ️ {}: rebote cerrado por stop en el exchange", symbol);
+                self.publish_rebound_exit(&symbol, &pos, pos.stop, "stop");
+                self.rebound.remove(&symbol);
+                self.save_rebound();
+                continue;
+            }
+            let Some(sig) = signals.get(&symbol) else { continue };
+            let held_h = now.saturating_sub(pos.opened_ms) / HOUR_MS;
+            let reason = if sig.rsi > self.rebound_cfg.exit_rsi {
+                Some(format!("rebote completado (RSI {:.0})", sig.rsi))
+            } else if held_h >= self.rebound_cfg.max_hold_hours {
+                Some(format!("{} h sin rebote suficiente", held_h))
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                used_notional -= pos.size * sig.close;
+                self.rebound_exit(&symbol, &pos, sig.close, &reason).await;
+            }
+        }
+
+        // 2. Entradas: las más sobrevendidas primero
+        let mut candidates: Vec<(&String, &Signal)> = signals
+            .iter()
+            .filter(|(s, sig)| {
+                sig.rsi < self.rebound_cfg.entry_rsi
+                    && selected.contains(*s)
+                    && !self.rebound.contains_key(*s)
+                    && !trend_held.contains(*s)
+                    && !(self.rebound_is_live() && exchange_positions.contains_key(*s))
+            })
+            .collect();
+        candidates.sort_by(|a, b| a.1.rsi.cmp(&b.1.rsi));
+
+        for (symbol, sig) in candidates {
+            if self.rebound.len() >= self.rebound_cfg.max_positions {
+                info!(
+                    "⏸️ {}: sobreventa (RSI {:.0}) ignorada, máximo de {} posiciones de rebote",
+                    symbol, sig.rsi, self.rebound_cfg.max_positions
+                );
+                continue;
+            }
+            let dist = self.rebound_cfg.stop_atr * sig.atr;
+            if dist <= Decimal::ZERO || sig.close <= Decimal::ZERO {
+                continue;
+            }
+            let stop_frac = dist / sig.close;
+            let room = equity * self.cfg.max_total_leverage - used_notional;
+            let Some(notional) = entry_notional(
+                equity,
+                self.rebound_cfg.risk_per_trade,
+                self.cfg.max_risk_per_trade.max(self.rebound_cfg.risk_per_trade),
+                stop_frac,
+                room,
+            ) else {
+                info!(
+                    "⏸️ {}: sobreventa (RSI {:.0}) sin tamaño suficiente (stop a {:.2}%, cupo ${:.2})",
+                    symbol,
+                    sig.rsi,
+                    stop_frac * dec!(100),
+                    room
+                );
+                continue;
+            };
+            if let Some(n) = self.rebound_enter(symbol, sig, notional, dist).await {
+                used_notional += n;
+            }
+        }
+        used_notional
+    }
+
+    async fn rebound_enter(&mut self, symbol: &str, sig: &Signal, notional: Decimal, dist: Decimal) -> Option<Decimal> {
+        let live = self.rebound_is_live();
+        let (size, entry, stop_oid) = if live {
+            let asset = self.asset(symbol)?;
+            let mid = self.client.get_mid_price(symbol).await.ok()?;
+            let limit = mid * (Decimal::ONE + self.cfg.entry_slippage);
+            if let Err(e) = self
+                .client
+                .place_order_ext(asset, HyperliquidOrderSide::Buy, notional / sig.close, limit, hypersdk::hypercore::types::TimeInForce::Ioc, false)
+                .await
+            {
+                error!("❌ Rebote: entrada en {} falló: {}", symbol, e);
+                return None;
+            }
+            let (filled, entry) = match self.client.get_position(symbol).await {
+                Ok(p) if p.0 > Decimal::ZERO => p,
+                _ => {
+                    warn!("Rebote {}: la orden IOC no se ejecutó", symbol);
+                    return None;
+                }
+            };
+            match self.client.place_stop_loss(symbol, true, filled, entry - dist).await {
+                Ok(oid) => (filled, entry, oid),
+                Err(e) => {
+                    error!("❌ Rebote {}: stop no colocado ({}); cerrando", symbol, e);
+                    let _ = self.client.close_position(symbol, dec!(0.01)).await;
+                    return None;
+                }
+            }
+        } else {
+            let entry = sig.close * (Decimal::ONE + PAPER_COST);
+            self.paper_equity -= notional * PAPER_COST;
+            (notional / entry, entry, None)
+        };
+
+        let pos = ReboundPosition {
+            size,
+            entry,
+            stop: entry - dist,
+            opened_ms: now_ms(),
+            paper: !live,
+            stop_oid,
+        };
+        let msg = format!(
+            "🔄 ENTRADA REBOTE {} {}: RSI {:.0} a ${:.4}, nocional ${:.2}, stop ${:.4} ({:.2}% abajo), salida con RSI > {} o en {} h",
+            if live { "REAL" } else { "PAPEL" },
+            symbol,
+            sig.rsi,
+            entry,
+            size * entry,
+            pos.stop,
+            dist / sig.close * dec!(100),
+            self.rebound_cfg.exit_rsi,
+            self.rebound_cfg.max_hold_hours
+        );
+        info!("{}", msg);
+        let _ = self.notifier.send_message(&msg).await;
+        self.notifier.publish_signal(SignalEvent::Entry {
+            symbol: symbol.to_string(),
+            price: entry,
+            stop: pos.stop,
+            paper: !live,
+            strategy: STRATEGY_REBOUND.into(),
+        });
+        self.rebound.insert(symbol.to_string(), pos);
+        self.save_rebound();
+        Some(size * entry)
+    }
+
+    async fn rebound_exit(&mut self, symbol: &str, pos: &ReboundPosition, price: Decimal, reason: &str) {
+        let exit_px = if pos.paper {
+            let exit_px = price * (Decimal::ONE - PAPER_COST);
+            self.paper_equity += pos.size * (exit_px - pos.entry);
+            exit_px
+        } else {
+            if let (Some(oid), Some(asset)) = (pos.stop_oid, self.asset(symbol)) {
+                let _ = self.client.cancel_order(asset, oid).await;
+            }
+            let mid = self.client.get_mid_price(symbol).await.unwrap_or(price);
+            if let Err(e) = self.client.close_position(symbol, dec!(0.01)).await {
+                error!("❌ Rebote: no se pudo cerrar {}: {}", symbol, e);
+                return;
+            }
+            mid
+        };
+        let pnl = pos.size * (exit_px - pos.entry);
+        let msg = format!(
+            "🔄 SALIDA REBOTE {} {} ({}): entrada ${:.4} salida ${:.4} P&L ${:.2}",
+            if pos.paper { "PAPEL" } else { "REAL" },
+            symbol,
+            reason,
+            pos.entry,
+            exit_px,
+            pnl
+        );
+        info!("{}", msg);
+        let _ = self.notifier.send_message(&msg).await;
+        self.publish_rebound_exit(symbol, pos, exit_px, reason);
+        self.rebound.remove(symbol);
+        self.save_rebound();
+    }
+
+    fn publish_rebound_exit(&self, symbol: &str, pos: &ReboundPosition, exit: Decimal, reason: &str) {
+        self.notifier.publish_signal(SignalEvent::Exit {
+            symbol: symbol.to_string(),
+            entry: pos.entry,
+            exit,
+            initial_stop: Some(pos.stop),
+            reason: reason.to_string(),
+            paper: pos.paper,
+            strategy: STRATEGY_REBOUND.into(),
+        });
+    }
+
+    /// Stops de las posiciones de rebote en papel (cada tick)
+    async fn check_rebound_paper_stops(&mut self) {
+        let open: Vec<(String, ReboundPosition)> = self
+            .rebound
+            .iter()
+            .filter(|(_, p)| p.paper)
+            .map(|(s, p)| (s.clone(), p.clone()))
+            .collect();
+        if open.is_empty() {
+            return;
+        }
+        let Ok(mids) = self.client.get_all_mids().await else { return };
+        for (symbol, pos) in open {
+            if let Some(&mid) = mids.get(&symbol) {
+                if mid <= pos.stop {
+                    self.rebound_exit(&symbol, &pos, mid, "stop").await;
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -766,6 +1141,13 @@ impl TrendTrader {
                 positions.insert(symbol.clone(), (p.size, p.entry));
                 if let Some(mid) = mids.get(symbol) {
                     unrealized += p.size * (*mid - p.entry);
+                }
+            }
+        }
+        for (symbol, rb) in &self.rebound {
+            if rb.paper {
+                if let Some(mid) = mids.get(symbol) {
+                    unrealized += rb.size * (*mid - rb.entry);
                 }
             }
         }
@@ -829,6 +1211,22 @@ fn compute_signal(candles: &[Candle], cfg: &TrendConfig) -> Option<Signal> {
         prev_close = Some(c.close);
     }
 
+    // RSI(14) de Wilder (igual que tools/backtest/dips.py)
+    let mut avg_gain: Option<Decimal> = None;
+    let mut avg_loss: Option<Decimal> = None;
+    let rsi_period = dec!(14);
+    for w in candles.windows(2) {
+        let ch = w[1].close - w[0].close;
+        let (g, l) = if ch > Decimal::ZERO { (ch, Decimal::ZERO) } else { (Decimal::ZERO, -ch) };
+        avg_gain = Some(avg_gain.map_or(g, |a| a + (g - a) / rsi_period));
+        avg_loss = Some(avg_loss.map_or(l, |a| a + (l - a) / rsi_period));
+    }
+    let rsi = match (avg_gain, avg_loss) {
+        (Some(g), Some(l)) if l > Decimal::ZERO => dec!(100) - dec!(100) / (Decimal::ONE + g / l),
+        (Some(_), Some(_)) => dec!(100),
+        _ => dec!(50),
+    };
+
     let last = &candles[n - 1];
     let prior = &candles[n - 1 - cfg.breakout_hours..n - 1];
     let exit_prior = &candles[n - 1 - cfg.exit_hours.min(n - 1)..n - 1];
@@ -841,6 +1239,7 @@ fn compute_signal(candles: &[Candle], cfg: &TrendConfig) -> Option<Signal> {
         atr: atr?,
         breakout_high,
         exit_low,
+        rsi,
     })
 }
 
@@ -894,6 +1293,33 @@ mod tests {
         assert_eq!(entry_notional(eq, dec!(0.005), dec!(0.0125), dec!(0.0613), dec!(8)), None);
         // max_risk == risk: comportamiento anterior (se omite)
         assert_eq!(entry_notional(eq, dec!(0.005), dec!(0.005), dec!(0.0613), dec!(150)), None);
+    }
+
+    #[test]
+    fn rsi_is_low_after_steady_drop_and_high_after_rise() {
+        let cfg = TrendConfig { breakout_hours: 24, exit_hours: 6, atr_period: 3, ..Default::default() };
+        let down: Vec<Candle> = (0..60)
+            .map(|i| {
+                let p = 100.0 - i as f64 * 0.5;
+                candle(i, p + 0.2, p - 0.2, p)
+            })
+            .collect();
+        assert!(compute_signal(&down, &cfg).unwrap().rsi < dec!(20));
+        let up: Vec<Candle> = (0..60)
+            .map(|i| {
+                let p = 100.0 + i as f64 * 0.5;
+                candle(i, p + 0.2, p - 0.2, p)
+            })
+            .collect();
+        assert!(compute_signal(&up, &cfg).unwrap().rsi > dec!(80));
+    }
+
+    #[test]
+    fn rebound_config_is_paper_by_default() {
+        let c = ReboundConfig::default();
+        assert!(c.enabled && !c.live);
+        assert_eq!(c.entry_rsi, dec!(20));
+        assert_eq!(c.max_hold_hours, 48);
     }
 
     #[test]
