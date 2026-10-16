@@ -345,6 +345,8 @@ pub struct ClosedTrade {
     pub r: Option<f64>,
     pub notional: Option<f64>,
     pub pnl_usd: Option<f64>,
+    /// Resultado como % del capital que había antes de la operación
+    pub account_pct: Option<f64>,
     pub reason: String,
 }
 
@@ -463,6 +465,8 @@ impl SignalHistory {
         }
         let mut open: HashMap<String, Pending> = HashMap::new();
         let mut closed: Vec<ClosedTrade> = Vec::new();
+        // Capital antes de cada cierre (para el % de la cuenta)
+        let mut equity_before = initial_capital;
 
         for r in &self.records {
             match &r.event {
@@ -491,6 +495,12 @@ impl SignalHistory {
                     let pnl_pct = r.event.pnl_pct().unwrap_or(0.0);
                     let opened_at = pending.as_ref().map_or(r.at, |p| p.at);
                     let notional = pending.as_ref().and_then(|p| p.notional);
+                    let pnl_usd = notional.map(|n| n * pnl_pct / 100.0);
+                    let account_pct = match pnl_usd {
+                        Some(p) if equity_before > 0.0 => Some(p / equity_before * 100.0),
+                        _ => None,
+                    };
+                    equity_before += pnl_usd.unwrap_or(0.0);
                     closed.push(ClosedTrade {
                         id: r.id,
                         symbol: symbol.clone(),
@@ -504,7 +514,8 @@ impl SignalHistory {
                         pnl_pct,
                         r: r.event.r_multiple(),
                         notional,
-                        pnl_usd: notional.map(|n| n * pnl_pct / 100.0),
+                        pnl_usd,
+                        account_pct,
                         reason: reason.clone(),
                     });
                 }
@@ -718,6 +729,8 @@ mod tests {
         let btc = j.closed.last().unwrap(); // más recientes primero -> la primera es la última
         assert!((btc.pnl_usd.unwrap() - 12.0).abs() < 1e-9);
         assert_eq!(btc.notional, Some(200.0));
+        // +$12 sobre $500 de capital = +2.4% de la cuenta
+        assert!((btc.account_pct.unwrap() - 2.4).abs() < 1e-9);
         assert!(j.closed[0].pnl_usd.is_none());
         assert!((j.stats.total_pnl_usd - 12.0).abs() < 1e-9);
         assert_eq!(j.stats.wins, 1);

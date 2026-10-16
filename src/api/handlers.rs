@@ -166,7 +166,13 @@ pub async fn get_config(state: ApiState) -> Result<impl Reply, Rejection> {
         }).collect(),
         telegram: TelegramConfigResponse {
             enabled: telegram.enabled,
-            bot_token: telegram.bot_token.clone().unwrap_or_default(),
+            // Nunca exponer el token completo
+            bot_token: telegram
+                .bot_token
+                .as_deref()
+                .filter(|t| t.len() > 10)
+                .map(|t| format!("{}…{}", &t[..6], &t[t.len() - 4..]))
+                .unwrap_or_default(),
             chat_id: telegram.chat_id.clone().unwrap_or_default(),
             notify_orders: telegram.notify_orders,
             notify_fills: telegram.notify_fills,
@@ -191,7 +197,7 @@ pub async fn update_config(
     state: ApiState,
 ) -> Result<impl Reply, Rejection> {
     
-    // Actualizar estrategia
+    // Actualizar estrategia (market making: se aplica al reiniciar)
     if let Some(strat_update) = update.strategy {
         let mut strategy = state.strategy_config.lock().await;
         if let Some(v) = strat_update.base_spread_ticks { strategy.base_spread_ticks = v; }
@@ -201,6 +207,20 @@ pub async fn update_config(
         if let Some(v) = strat_update.volatility_lookback_minutes { strategy.volatility_lookback_minutes = v; }
         if let Some(v) = strat_update.order_refresh_ms { strategy.order_refresh_time_ms = v; }
         if let Some(v) = strat_update.max_inventory_ratio { strategy.max_inventory_ratio = v; }
+        if let Some(repo) = &state.config_repo {
+            let db = crate::db::models::StrategyConfigDB {
+                base_spread_ticks: strategy.base_spread_ticks as i32,
+                risk_aversion: Decimal::from_f64(strategy.risk_aversion).unwrap_or_default(),
+                market_impact: Decimal::from_f64(strategy.market_impact).unwrap_or_default(),
+                inventory_skew_strength: Decimal::from_f64(strategy.inventory_skew_strength).unwrap_or_default(),
+                volatility_lookback_minutes: strategy.volatility_lookback_minutes as i64,
+                order_refresh_ms: strategy.order_refresh_time_ms as i64,
+                max_inventory_ratio: Decimal::from_f64(strategy.max_inventory_ratio).unwrap_or_default(),
+            };
+            if let Err(e) = repo.update_strategy_config(&db).await {
+                tracing::warn!("No se pudo guardar la estrategia en la BD: {}", e);
+            }
+        }
     }
     
     // Actualizar riesgo (usando porcentajes)
@@ -211,6 +231,39 @@ pub async fn update_config(
         if let Some(v) = risk_update.max_drawdown_pct { risk.max_drawdown_pct = v; }
         if let Some(v) = risk_update.kill_switch_enabled { risk.kill_switch_enabled = v; }
         if let Some(v) = risk_update.circuit_breaker_threshold { risk.circuit_breaker_threshold = v; }
+        // Aplicar en vivo al risk manager y guardar en la BD
+        state.risk_manager.lock().await.set_config(risk.clone());
+        if let Some(repo) = &state.config_repo {
+            let db = crate::db::models::RiskConfigDB {
+                max_position_size_pct: Decimal::from_f64(risk.max_position_size_pct).unwrap_or_default(),
+                max_daily_loss_pct: Decimal::from_f64(risk.max_daily_loss_pct).unwrap_or_default(),
+                max_drawdown_pct: Decimal::from_f64(risk.max_drawdown_pct).unwrap_or_default(),
+                kill_switch_enabled: risk.kill_switch_enabled,
+                circuit_breaker_threshold: Decimal::from_f64(risk.circuit_breaker_threshold).unwrap_or_default(),
+            };
+            if let Err(e) = repo.update_risk_config(&db).await {
+                tracing::warn!("No se pudo guardar el riesgo en la BD: {}", e);
+            }
+        }
+    }
+
+    // Actualizar Telegram (se aplica al reiniciar el bot)
+    if let Some(tg) = update.telegram {
+        let mut cfg = state.telegram_config.lock().await;
+        if let Some(v) = tg.enabled { cfg.enabled = v; }
+        // El dashboard recibe el token enmascarado: solo se guarda si es uno nuevo
+        if let Some(v) = tg.bot_token.filter(|t| !t.trim().is_empty() && !t.contains('…') && !t.contains('•')) {
+            cfg.bot_token = Some(v.trim().to_string());
+        }
+        if let Some(v) = tg.chat_id.filter(|c| !c.trim().is_empty()) { cfg.chat_id = Some(v.trim().to_string()); }
+        if let Some(v) = tg.notify_orders { cfg.notify_orders = v; }
+        if let Some(v) = tg.notify_fills { cfg.notify_fills = v; }
+        if let Some(v) = tg.notify_status { cfg.notify_status = v; }
+        if let Some(repo) = &state.config_repo {
+            if let Err(e) = repo.update_telegram_config(&cfg).await {
+                tracing::warn!("No se pudo guardar Telegram en la BD: {}", e);
+            }
+        }
     }
     
     // Actualizar mercados
@@ -308,28 +361,235 @@ pub async fn update_config(
 // HANDLERS DE CONTROL DEL BOT
 // =============================================
 
+/// Estado del bot para el encabezado del dashboard
+pub async fn bot_status(state: ApiState) -> Result<impl Reply, Rejection> {
+    let (mode, live, paused) = {
+        let bot = state.bot.lock().await;
+        (
+            bot.strategy_mode(),
+            bot.trend_is_live(),
+            bot.paused_handle().map(|p| p.load(std::sync::atomic::Ordering::Relaxed)),
+        )
+    };
+    let rebound_live = live && std::env::var("REBOUND_LIVE").map_or(false, |v| v.trim() == "true");
+    let risk = {
+        let rm = state.risk_manager.lock().await;
+        serde_json::json!({
+            "status": format!("{:?}", rm.status()),
+            "kill_switch": rm.is_kill_switch_engaged(),
+            "drawdown_pct": (rm.current_drawdown() * Decimal::from(100)).to_f64(),
+        })
+    };
+    Ok(json(&serde_json::json!({
+        "strategy_mode": mode,
+        "live": live,
+        "rebound_live": rebound_live,
+        "paused": paused.unwrap_or(false),
+        "can_pause": paused.is_some(),
+        "uptime_secs": state.bot_start_time.elapsed().as_secs(),
+        "version": env!("CARGO_PKG_VERSION"),
+        "risk": risk,
+    })))
+}
+
+async fn set_paused(state: &ApiState, value: bool) -> Result<warp::reply::Json, Rejection> {
+    let handle = state.bot.lock().await.paused_handle();
+    let Some(handle) = handle else {
+        return Ok(json(&serde_json::json!({
+            "success": false,
+            "message": "La pausa solo está disponible con la estrategia de tendencia"
+        })));
+    };
+    handle.store(value, std::sync::atomic::Ordering::Relaxed);
+    if let Some(repo) = &state.config_repo {
+        let _ = repo.set_config_value("trading_paused", if value { "true" } else { "false" }, "bool").await;
+    }
+    let msg = if value {
+        "Bot en pausa: no abrirá nuevas posiciones (las abiertas se siguen gestionando)"
+    } else {
+        "Bot reanudado: vuelve a abrir posiciones"
+    };
+    info!("{} {}", if value { "⏸️" } else { "▶️" }, msg);
+    let _ = state.notifier.send_message(&format!("{} {}", if value { "⏸️" } else { "▶️" }, msg)).await;
+    Ok(json(&serde_json::json!({ "success": true, "paused": value, "message": msg })))
+}
+
+/// Reanuda nuevas entradas
 pub async fn start_bot(state: ApiState) -> Result<impl Reply, Rejection> {
-    let _bot = state.bot.lock().await;
-    Ok(json(&serde_json::json!({
-        "status": "success",
-        "message": "Bot iniciado"
-    })))
+    set_paused(&state, false).await
 }
 
+/// Pausa nuevas entradas (no cierra posiciones)
 pub async fn stop_bot(state: ApiState) -> Result<impl Reply, Rejection> {
-    let _bot = state.bot.lock().await;
+    set_paused(&state, true).await
+}
+
+/// Reinicia el proceso: Docker/systemd lo vuelven a levantar (restart policy)
+pub async fn restart_bot(state: ApiState) -> Result<impl Reply, Rejection> {
+    let _ = state.notifier.send_message("🔄 Reiniciando el bot desde el dashboard...").await;
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        tracing::warn!("🔄 Reinicio solicitado desde el dashboard");
+        std::process::exit(0);
+    });
     Ok(json(&serde_json::json!({
         "status": "success",
-        "message": "Bot detenido"
+        "success": true,
+        "message": "Reiniciando: el bot vuelve en ~30 segundos"
     })))
 }
 
-pub async fn restart_bot(state: ApiState) -> Result<impl Reply, Rejection> {
-    let _bot = state.bot.lock().await;
+// =============================================
+// CONFIGURACIÓN DE ESTRATEGIAS (tendencia + rebote)
+// =============================================
+
+fn strategy_json(t: &crate::trend::TrendConfig, r: &crate::trend::ReboundConfig) -> serde_json::Value {
+    let f = |d: Decimal| d.to_f64().unwrap_or(0.0);
+    serde_json::json!({
+        "trend_risk_per_trade": f(t.risk_per_trade),
+        "trend_max_risk_per_trade": f(t.max_risk_per_trade),
+        "trend_max_positions": t.max_positions,
+        "trend_max_leverage": f(t.max_total_leverage),
+        "trend_breakout_hours": t.breakout_hours,
+        "trend_exit_hours": t.exit_hours,
+        "trend_stop_atr": f(t.stop_atr),
+        "rebound_enabled": r.enabled,
+        "rebound_live": r.live,
+        "rebound_entry_rsi": f(r.entry_rsi),
+        "rebound_exit_rsi": f(r.exit_rsi),
+        "rebound_max_hold_hours": r.max_hold_hours,
+        "rebound_risk_per_trade": f(r.risk_per_trade),
+        "rebound_max_positions": r.max_positions,
+    })
+}
+
+pub async fn get_strategy_config(state: ApiState) -> Result<impl Reply, Rejection> {
+    let handle = state.bot.lock().await.trend_config_handle();
+    let Some(handle) = handle else {
+        return Ok(json(&serde_json::json!({ "enabled": false })));
+    };
+    let (t, r) = handle.read().await.clone();
+    let (et, er) = (crate::trend::TrendConfig::from_env(), crate::trend::ReboundConfig::from_env());
+    let saved = match &state.config_repo {
+        Some(repo) => repo.get_config_value("strategy_overrides").await.ok().flatten(),
+        None => None,
+    };
     Ok(json(&serde_json::json!({
-        "status": "success",
-        "message": "Bot reiniciado"
+        "enabled": true,
+        "active": strategy_json(&t, &r),
+        "env_default": strategy_json(&et, &er),
+        "source": if saved.is_some() { "dashboard" } else { "env" },
     })))
+}
+
+pub async fn set_strategy_config(body: serde_json::Value, state: ApiState) -> Result<impl Reply, Rejection> {
+    let overrides: crate::trend::StrategyOverrides = match serde_json::from_value(body) {
+        Ok(o) => o,
+        Err(e) => {
+            return Ok(json(&serde_json::json!({ "success": false, "message": format!("Datos inválidos: {}", e) })))
+        }
+    };
+    let handle = state.bot.lock().await.trend_config_handle();
+    let Some(handle) = handle else {
+        return Ok(json(&serde_json::json!({ "success": false, "message": "La estrategia de tendencia no está activa" })));
+    };
+    let (t, r) = overrides.apply(&crate::trend::TrendConfig::from_env(), &crate::trend::ReboundConfig::from_env());
+    if let Some(repo) = &state.config_repo {
+        let raw = serde_json::to_string(&overrides).unwrap_or_default();
+        if let Err(e) = repo.set_config_value("strategy_overrides", &raw, "json").await {
+            return Ok(json(&serde_json::json!({ "success": false, "message": format!("Error guardando: {}", e) })));
+        }
+    }
+    *handle.write().await = (t.clone(), r.clone());
+    info!("⚙️ Configuración de estrategias actualizada desde el dashboard");
+    Ok(json(&serde_json::json!({
+        "success": true,
+        "message": "Guardado. Se aplica en la próxima evaluación horaria.",
+        "active": strategy_json(&t, &r),
+    })))
+}
+
+pub async fn reset_strategy_config(state: ApiState) -> Result<impl Reply, Rejection> {
+    if let Some(repo) = &state.config_repo {
+        let _ = repo.delete_config_value("strategy_overrides").await;
+    }
+    let (t, r) = (crate::trend::TrendConfig::from_env(), crate::trend::ReboundConfig::from_env());
+    if let Some(handle) = state.bot.lock().await.trend_config_handle() {
+        *handle.write().await = (t.clone(), r.clone());
+    }
+    Ok(json(&serde_json::json!({
+        "success": true,
+        "message": "Restablecido a los valores del .env",
+        "active": strategy_json(&t, &r),
+    })))
+}
+
+// =============================================
+// SISTEMA
+// =============================================
+
+pub async fn system_info(state: ApiState) -> Result<impl Reply, Rejection> {
+    let env = |k: &str| std::env::var(k).unwrap_or_default();
+    let mask = |s: String| {
+        if s.len() > 10 { format!("{}…{}", &s[..6], &s[s.len() - 4..]) } else if s.is_empty() { "—".into() } else { "••••".into() }
+    };
+    let (mode, live) = {
+        let bot = state.bot.lock().await;
+        (bot.strategy_mode(), bot.trend_is_live())
+    };
+    let initial = state.risk_manager.lock().await.initial_capital().to_f64();
+    let exchange = state.exchange_type.lock().await.clone();
+    Ok(json(&serde_json::json!({
+        "exchange_type": exchange,
+        "live": live,
+        "rebound_live": live && env("REBOUND_LIVE").trim() == "true",
+        "strategy_mode": mode,
+        "network": env("NETWORK"),
+        "wallet": mask(env("WALLET")),
+        "initial_capital": initial,
+        "data_dir": crate::signals::data_dir().display().to_string(),
+        "log_level": env("RUST_LOG"),
+        "api_token_set": !env("ADMIN_API_TOKEN").trim().is_empty(),
+        "uptime_secs": state.bot_start_time.elapsed().as_secs(),
+        "version": env!("CARGO_PKG_VERSION"),
+    })))
+}
+
+/// Cambia el capital inicial (simulado). Se aplica al reiniciar.
+pub async fn set_initial_capital(body: serde_json::Value, state: ApiState) -> Result<impl Reply, Rejection> {
+    let Some(capital) = body["capital"].as_f64().filter(|c| *c >= 10.0 && *c <= 10_000_000.0) else {
+        return Ok(json(&serde_json::json!({ "success": false, "message": "Capital inválido (mínimo $10)" })));
+    };
+    let Some(repo) = &state.config_repo else {
+        return Ok(json(&serde_json::json!({ "success": false, "message": "Base de datos no disponible" })));
+    };
+    match repo.update_initial_capital(Decimal::from_f64(capital).unwrap_or_default()).await {
+        Ok(_) => Ok(json(&serde_json::json!({
+            "success": true,
+            "message": format!("Capital inicial ${:.2} guardado. Reinicia el bot para aplicarlo.", capital),
+            "restart_required": true,
+        }))),
+        Err(e) => Ok(json(&serde_json::json!({ "success": false, "message": format!("Error: {}", e) }))),
+    }
+}
+
+/// Mensaje de prueba solo al chat del administrador
+pub async fn telegram_test(state: ApiState) -> Result<impl Reply, Rejection> {
+    match state
+        .notifier
+        .send_message("✅ Mensaje de prueba desde el dashboard: el bot puede escribirte por Telegram.")
+        .await
+    {
+        Ok(_) if state.notifier.is_enabled().await => Ok(json(&serde_json::json!({
+            "success": true,
+            "message": "Mensaje de prueba enviado a tu chat de administrador"
+        }))),
+        Ok(_) => Ok(json(&serde_json::json!({
+            "success": false,
+            "message": "Telegram no está configurado (falta token o chat id)"
+        }))),
+        Err(e) => Ok(json(&serde_json::json!({ "success": false, "message": e }))),
+    }
 }
 
 #[derive(serde::Deserialize, Debug)]

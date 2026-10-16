@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 // =============================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PositionResponse {
     pub symbol: String,
     pub size: f64,
@@ -18,6 +19,7 @@ pub struct PositionResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TradeResponse {
     pub id: String,
     pub symbol: String,
@@ -30,6 +32,7 @@ pub struct TradeResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HistoryPoint {
     pub timestamp: String,
     pub balance: f64,
@@ -37,6 +40,7 @@ pub struct HistoryPoint {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StatsResponse {
     pub balance: f64,
     pub pnl: f64,
@@ -58,6 +62,7 @@ pub struct StatsResponse {
 // =============================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StrategyConfigResponse {
     pub base_spread_ticks: u32,
     pub risk_aversion: f64,
@@ -69,6 +74,7 @@ pub struct StrategyConfigResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RiskConfigResponse {
     pub max_position_size_pct: f64, // Ahora es porcentaje
     pub max_daily_loss_pct: f64,    // Ahora es porcentaje
@@ -78,6 +84,7 @@ pub struct RiskConfigResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MarketConfigResponse {
     pub symbol: String,
     pub enabled: bool,
@@ -86,6 +93,7 @@ pub struct MarketConfigResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TelegramConfigResponse {
     pub enabled: bool,
     pub bot_token: String,
@@ -96,6 +104,7 @@ pub struct TelegramConfigResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FullConfigResponse {
     pub strategy: StrategyConfigResponse,
     pub risk: RiskConfigResponse,
@@ -107,6 +116,7 @@ pub struct FullConfigResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LeverageResponse {
     pub exchange: String,
     pub symbol: String,
@@ -115,6 +125,7 @@ pub struct LeverageResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProtectionResponse {
     pub max_capital_at_risk_pct: f64,
     pub auto_stop_loss_enabled: bool,
@@ -123,11 +134,14 @@ pub struct ProtectionResponse {
     pub emergency_withdraw_enabled: bool,
 }
 
+// Todas las structs usan camelCase: es el formato que envía y espera el dashboard
+// (antes eran snake_case y el backend ignoraba en silencio cada campo guardado).
 // =============================================
 // MODELOS PARA RECIBIR CONFIGURACIÓN
 // =============================================
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateStrategyRequest {
     pub base_spread_ticks: Option<u32>,
     pub risk_aversion: Option<f64>,
@@ -139,6 +153,7 @@ pub struct UpdateStrategyRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateRiskRequest {
     pub max_position_size_pct: Option<f64>, // Ahora es porcentaje
     pub max_daily_loss_pct: Option<f64>,    // Ahora es porcentaje
@@ -148,6 +163,7 @@ pub struct UpdateRiskRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateMarketRequest {
     pub symbol: String,
     pub enabled: Option<bool>,
@@ -156,6 +172,7 @@ pub struct UpdateMarketRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateTelegramRequest {
     pub enabled: Option<bool>,
     pub bot_token: Option<String>,
@@ -166,6 +183,7 @@ pub struct UpdateTelegramRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FullConfigUpdate {
     pub strategy: Option<UpdateStrategyRequest>,
     pub risk: Option<UpdateRiskRequest>,
@@ -176,6 +194,7 @@ pub struct FullConfigUpdate {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateLeverageRequest {
     pub exchange: String,
     pub symbol: String,
@@ -183,6 +202,7 @@ pub struct UpdateLeverageRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateProtectionRequest {
     pub max_capital_at_risk_pct: Option<f64>,
     pub auto_stop_loss_enabled: Option<bool>,

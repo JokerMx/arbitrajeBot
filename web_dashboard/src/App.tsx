@@ -5,7 +5,10 @@ import { StatsCards } from "./components/Dashboard/StatsCards";
 import { BalanceChart } from "./components/Dashboard/BalanceChart";
 import { PositionsTable } from "./components/Dashboard/PositionsTable";
 import { TradesTable } from "./components/Dashboard/TradesTable";
-import { JournalDashboard, JournalStatsView } from "./components/Dashboard/Journal";
+import { JournalDashboard, JournalStatsView, JournalHistoryView } from "./components/Dashboard/Journal";
+import { SignalsTimeline } from "./components/Dashboard/SignalsTimeline";
+import { StrategySettings } from "./components/Controls/StrategySettings";
+import { SystemInfo } from "./components/Controls/SystemInfo";
 import { StrategyControls } from "./components/Controls/StrategyControls";
 import { RiskControls } from "./components/Controls/RiskControls";
 import { MarketControls } from "./components/Controls/MarketControls";
@@ -48,9 +51,15 @@ const StrategyView: React.FC = () => {
   return (
     <div className="space-y-6">
       <h2 className="text-2xl font-bold">Configuración de Estrategia</h2>
-      <div className="bg-dark-200 rounded-xl p-6 border border-dark-300">
-        <StrategyControls />
-      </div>
+      <StrategySettings />
+      <details className="bg-dark-200 rounded-xl border border-dark-300">
+        <summary className="cursor-pointer px-6 py-4 text-sm text-gray-400">
+          Market making (Avellaneda-Stoikov) — solo se usa con STRATEGY_MODE=market_making; se aplica al reiniciar
+        </summary>
+        <div className="px-6 pb-6">
+          <StrategyControls />
+        </div>
+      </details>
     </div>
   );
 };
@@ -63,9 +72,18 @@ const RiskView: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <RiskControls />
         <ProtectionControls />
-        <div className="bg-dark-200 rounded-xl p-6 border border-dark-300 lg:col-span-2">
-          <LeverageControls />
-        </div>
+        <p className="text-xs text-gray-500 lg:col-span-2 -mt-2">
+          La pérdida diaria máxima, el drawdown máximo, el kill switch y la protección de capital se aplican al bot al
+          instante y se guardan. Si se superan, el bot cierra las posiciones y deja de abrir nuevas.
+        </p>
+        <details className="bg-dark-200 rounded-xl border border-dark-300 lg:col-span-2">
+          <summary className="cursor-pointer px-6 py-4 text-sm text-gray-400">
+            Apalancamiento por símbolo — solo market making (la tendencia usa el apalancamiento total de Estrategia)
+          </summary>
+          <div className="px-6 pb-6">
+            <LeverageControls />
+          </div>
+        </details>
       </div>
     </div>
   );
@@ -89,38 +107,19 @@ const HistoryView: React.FC = () => {
   return (
     <div className="space-y-6">
       <h2 className="text-2xl font-bold">Historial de Operaciones</h2>
-      <div className="bg-dark-200 rounded-xl p-6 border border-dark-300">
-        <TradesTable />
-      </div>
+      <JournalHistoryView />
     </div>
   );
 };
 
-const AlertsView: React.FC = () => {
-  console.log("📊 Renderizando AlertsView");
-  const { alerts } = useBotStore();
-  return (
-    <div className="space-y-6">
-      <h2 className="text-2xl font-bold">Alertas</h2>
-      <div className="bg-dark-200 rounded-xl p-6 border border-dark-300">
-        {alerts.length === 0 ? (
-          <p className="text-gray-400 text-center py-8">No hay alertas</p>
-        ) : (
-          <div className="space-y-2">
-            {alerts.map((alert, i) => (
-              <div
-                key={i}
-                className="p-3 bg-dark-300 rounded-lg text-sm border border-dark-400"
-              >
-                {alert}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+const AlertsView: React.FC = () => (
+  <div className="space-y-6">
+    <h2 className="text-2xl font-bold">Alertas y señales</h2>
+    <div className="bg-dark-200 rounded-xl p-6 border border-dark-300">
+      <SignalsTimeline />
     </div>
-  );
-};
+  </div>
+);
 
 const UsersView: React.FC = () => {
   console.log("📊 Renderizando UsersView");
@@ -138,16 +137,12 @@ const SettingsView: React.FC = () => {
     <div className="space-y-6">
       <h2 className="text-2xl font-bold">Configuración General</h2>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <SystemSettings />
+        <SystemInfo />
         <TelegramSettings />
-        <StrategyControls />
-        <RiskControls />
-        <LeverageControls />
-        <ProtectionControls />
-        <div className="bg-dark-200 rounded-xl p-6 border border-dark-300 lg:col-span-2">
-          <MarketControls />
-        </div>
       </div>
+      <p className="text-sm text-gray-400">
+        Estrategia, riesgo y mercados se configuran en sus propias secciones del menú.
+      </p>
     </div>
   );
 };

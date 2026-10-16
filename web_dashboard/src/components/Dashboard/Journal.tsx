@@ -22,6 +22,7 @@ import {
   Loader2,
   AlertCircle,
   RefreshCw,
+  Download,
 } from "lucide-react";
 import {
   useJournal,
@@ -33,6 +34,7 @@ import {
   duration,
   pnlColor,
   STRATEGY_LABEL,
+  downloadTradesCsv,
 } from "../../services/journal";
 
 const fmtDate = (iso: string, f = "dd/MM HH:mm") => {
@@ -329,6 +331,7 @@ const OpenPositions: React.FC<{ j: Journal }> = ({ j }) => (
               <th className="pb-2 pr-3">Stop</th>
               <th className="pb-2 pr-3">Tamaño</th>
               <th className="pb-2 pr-3">P&L</th>
+              <th className="pb-2 pr-3">% cuenta</th>
               <th className="pb-2">Abierta</th>
             </tr>
           </thead>
@@ -349,6 +352,11 @@ const OpenPositions: React.FC<{ j: Journal }> = ({ j }) => (
                 <td className={`py-2 pr-3 font-mono ${pnlColor(o.unrealized_usd)}`}>
                   {usd(o.unrealized_usd, true)} <span className="text-xs">({pct(o.unrealized_pct)})</span>
                 </td>
+                <td className={`py-2 pr-3 font-mono ${pnlColor(o.unrealized_usd)}`}>
+                  {o.unrealized_usd !== undefined
+                    ? pct((o.unrealized_usd / (j.initial_capital + j.stats.total_pnl_usd)) * 100)
+                    : "—"}
+                </td>
                 <td className="py-2 text-gray-400">{fmtDate(o.opened_at)}</td>
               </tr>
             ))}
@@ -360,14 +368,32 @@ const OpenPositions: React.FC<{ j: Journal }> = ({ j }) => (
 );
 
 // ---------------- Operaciones cerradas ----------------
-const ClosedTrades: React.FC<{ j: Journal }> = ({ j }) => {
+export const ClosedTrades: React.FC<{ j: Journal; limit?: number; title?: string }> = ({
+  j,
+  limit,
+  title = "Operaciones cerradas",
+}) => {
   const [filter, setFilter] = React.useState<"todas" | "tendencia" | "rebote">("todas");
-  const rows = j.closed.filter((t) => filter === "todas" || t.strategy === filter);
+  const all = j.closed.filter((t) => filter === "todas" || t.strategy === filter);
+  const rows = limit ? all.slice(0, limit) : all;
   return (
     <Card>
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-        <h3 className="text-lg font-semibold">Operaciones cerradas</h3>
+        <h3 className="text-lg font-semibold">
+          {title}
+          {limit && all.length > limit && (
+            <span className="text-xs text-gray-500 font-normal ml-2">últimas {limit} de {all.length}</span>
+          )}
+        </h3>
         <div className="flex gap-1 text-xs">
+          <button
+            onClick={() => downloadTradesCsv(all)}
+            disabled={all.length === 0}
+            className="flex items-center gap-1 px-3 py-1 rounded-lg bg-dark-300 text-gray-300 hover:bg-dark-400 disabled:opacity-40 mr-2"
+            title="Descargar en CSV (Excel)"
+          >
+            <Download className="w-3.5 h-3.5" /> CSV
+          </button>
           {(["todas", "tendencia", "rebote"] as const).map((f) => (
             <button
               key={f}
@@ -395,6 +421,7 @@ const ClosedTrades: React.FC<{ j: Journal }> = ({ j }) => {
                 <th className="pb-2 pr-3">Duración</th>
                 <th className="pb-2 pr-3">Tamaño</th>
                 <th className="pb-2 pr-3">Resultado</th>
+                <th className="pb-2 pr-3" title="Ganancia o pérdida sobre el capital total de la cuenta">% cuenta</th>
                 <th className="pb-2 pr-3">R</th>
                 <th className="pb-2">Motivo</th>
               </tr>
@@ -413,7 +440,11 @@ const ClosedTrades: React.FC<{ j: Journal }> = ({ j }) => {
                   <td className="py-2 pr-3">{duration(t.hours)}</td>
                   <td className="py-2 pr-3 font-mono">{usd(t.notional)}</td>
                   <td className={`py-2 pr-3 font-mono whitespace-nowrap ${pnlColor(t.pnl_pct)}`}>
-                    {usd(t.pnl_usd, true)} <span className="text-xs">({pct(t.pnl_pct)})</span>
+                    {usd(t.pnl_usd, true)}{" "}
+                    <span className="text-xs" title="Movimiento del precio">({pct(t.pnl_pct)} precio)</span>
+                  </td>
+                  <td className={`py-2 pr-3 font-mono font-semibold ${pnlColor(t.account_pct)}`}>
+                    {pct(t.account_pct)}
                   </td>
                   <td className={`py-2 pr-3 font-mono ${pnlColor(t.r)}`}>
                     {t.r !== null ? `${t.r >= 0 ? "+" : ""}${t.r.toFixed(2)}` : "—"}
@@ -474,7 +505,35 @@ export const JournalDashboard: React.FC = () => {
         <StrategyBreakdown j={data} />
       </div>
       <OpenPositions j={data} />
-      <ClosedTrades j={data} />
+      <ClosedTrades j={data} limit={10} title="Últimas operaciones" />
+    </div>
+  );
+};
+
+// ---------------- Vista "Historial" ----------------
+export const JournalHistoryView: React.FC = () => {
+  const { data, error, reload } = useJournal(60000);
+  if (error) {
+    return (
+      <Card className="text-center">
+        <p className="text-gray-300 mb-4">{error}</p>
+        <button onClick={reload} className="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg">
+          Reintentar
+        </button>
+      </Card>
+    );
+  }
+  if (!data) {
+    return (
+      <div className="flex justify-center py-20">
+        <Loader2 className="w-8 h-8 animate-spin text-primary-500" />
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-6">
+      <OpenPositions j={data} />
+      <ClosedTrades j={data} title="Todas las operaciones cerradas" />
     </div>
   );
 };

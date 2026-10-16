@@ -181,6 +181,43 @@ pub fn api_routes(
         .and(state_filter.clone())
         .and_then(handlers::get_signal_history);
 
+    let bot_status = warp::path!("api" / "bot" / "status")
+        .and(warp::get())
+        .and(state_filter.clone())
+        .and_then(handlers::bot_status);
+
+    let strategy_get = warp::path!("api" / "strategy" / "config")
+        .and(warp::get())
+        .and(state_filter.clone())
+        .and_then(handlers::get_strategy_config);
+
+    let strategy_set = warp::path!("api" / "strategy" / "config")
+        .and(warp::put())
+        .and(warp::body::json())
+        .and(state_filter.clone())
+        .and_then(handlers::set_strategy_config);
+
+    let strategy_reset = warp::path!("api" / "strategy" / "config")
+        .and(warp::delete())
+        .and(state_filter.clone())
+        .and_then(handlers::reset_strategy_config);
+
+    let system_get = warp::path!("api" / "system")
+        .and(warp::get())
+        .and(state_filter.clone())
+        .and_then(handlers::system_info);
+
+    let system_capital = warp::path!("api" / "system" / "capital")
+        .and(warp::put())
+        .and(warp::body::json())
+        .and(state_filter.clone())
+        .and_then(handlers::set_initial_capital);
+
+    let telegram_test = warp::path!("api" / "telegram" / "test")
+        .and(warp::post())
+        .and(state_filter.clone())
+        .and_then(handlers::telegram_test);
+
     let journal = warp::path!("api" / "journal")
         .and(warp::get())
         .and(state_filter.clone())
@@ -295,7 +332,14 @@ pub fn api_routes(
         .or(trend_symbols_get)
         .or(trend_symbols_set)
         .or(trend_symbols_reset)
-        .or(journal));
+        .or(journal)
+        .or(bot_status)
+        .or(strategy_get)
+        .or(strategy_set)
+        .or(strategy_reset)
+        .or(system_get)
+        .or(system_capital)
+        .or(telegram_test));
 
     let routes = api
         .or(ws)

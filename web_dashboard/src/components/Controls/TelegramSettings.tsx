@@ -26,7 +26,7 @@ export const TelegramSettings: React.FC = () => {
     try {
       await updateTelegram(localTelegram);
       setIsEditing(false);
-      toast.success("Configuración de Telegram actualizada");
+      toast.success("Guardado. Reinicia el bot (botón de encendido arriba) para aplicar token o chat.", { duration: 6000 });
     } catch (error) {
       toast.error("Error al guardar");
     }
@@ -42,14 +42,11 @@ export const TelegramSettings: React.FC = () => {
   const handleTestNotification = async () => {
     toast.loading("Enviando notificación de prueba...", { id: "test" });
     try {
-      const response = await fetch(`${backendApiBaseUrl}/telegram/broadcast`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: "🔔 Prueba de notificación desde el dashboard" }),
-      });
+      // Solo al chat del administrador (antes enviaba a TODOS los usuarios)
+      const response = await fetch(`${backendApiBaseUrl}/telegram/test`, { method: "POST" });
       const data = await response.json();
       if (data.success) {
-        toast.success("Notificación enviada", { id: "test" });
+        toast.success(data.message || "Notificación enviada", { id: "test" });
       } else {
         toast.error(data.message || "Error al enviar", { id: "test" });
       }

@@ -14,6 +14,7 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
@@ -42,7 +43,7 @@ pub fn env_symbols() -> Vec<String> {
         .collect()
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TrendConfig {
     /// Velas de 1h del canal de entrada
     pub breakout_hours: usize,
@@ -99,18 +100,74 @@ impl TrendConfig {
             max_positions: var("TREND_MAX_POSITIONS").unwrap_or(d.max_positions),
             entry_slippage: d.entry_slippage,
         };
-        // Límites de seguridad: el backtest mostró caídas de ~44% con 2% de riesgo
-        let risk_per_trade = cfg.risk_per_trade.max(dec!(0.001)).min(dec!(0.02));
+        cfg.sanitized()
+    }
+
+    /// Límites de seguridad (el backtest mostró caídas de ~44% con 2% de riesgo)
+    pub fn sanitized(self) -> Self {
+        let risk_per_trade = self.risk_per_trade.max(dec!(0.001)).min(dec!(0.02));
         Self {
             risk_per_trade,
             // Nunca menor que el riesgo normal ni mayor que 2%
-            max_risk_per_trade: cfg.max_risk_per_trade.max(risk_per_trade).min(dec!(0.02)),
-            max_total_leverage: cfg.max_total_leverage.max(Decimal::ONE).min(dec!(5)),
-            max_positions: cfg.max_positions.clamp(1, 10),
-            breakout_hours: cfg.breakout_hours.clamp(24, 1000),
-            exit_hours: cfg.exit_hours.clamp(6, 500),
-            ..cfg
+            max_risk_per_trade: self.max_risk_per_trade.max(risk_per_trade).min(dec!(0.02)),
+            max_total_leverage: self.max_total_leverage.max(Decimal::ONE).min(dec!(5)),
+            max_positions: self.max_positions.clamp(1, 10),
+            breakout_hours: self.breakout_hours.clamp(24, 1000),
+            exit_hours: self.exit_hours.clamp(6, 500),
+            stop_atr: self.stop_atr.max(dec!(1)).min(dec!(6)),
+            ..self
         }
+    }
+}
+
+/// Ajustes de estrategia hechos desde el dashboard (se guardan en la BD como JSON
+/// y se aplican sobre los valores del .env). Todos opcionales.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StrategyOverrides {
+    pub trend_risk_per_trade: Option<f64>,
+    pub trend_max_risk_per_trade: Option<f64>,
+    pub trend_max_positions: Option<usize>,
+    pub trend_max_leverage: Option<f64>,
+    pub trend_breakout_hours: Option<usize>,
+    pub trend_exit_hours: Option<usize>,
+    pub trend_stop_atr: Option<f64>,
+    pub rebound_enabled: Option<bool>,
+    pub rebound_entry_rsi: Option<f64>,
+    pub rebound_exit_rsi: Option<f64>,
+    pub rebound_max_hold_hours: Option<u64>,
+    pub rebound_risk_per_trade: Option<f64>,
+    pub rebound_max_positions: Option<usize>,
+}
+
+impl StrategyOverrides {
+    /// Configuración efectiva: .env + ajustes del dashboard, con límites de seguridad.
+    /// `rebound.live` nunca se cambia desde aquí (operar real solo por .env).
+    pub fn apply(&self, trend: &TrendConfig, rebound: &ReboundConfig) -> (TrendConfig, ReboundConfig) {
+        use rust_decimal::prelude::FromPrimitive;
+        let d = |v: Option<f64>, cur: Decimal| v.and_then(Decimal::from_f64).unwrap_or(cur);
+        let t = TrendConfig {
+            risk_per_trade: d(self.trend_risk_per_trade, trend.risk_per_trade),
+            max_risk_per_trade: d(self.trend_max_risk_per_trade, trend.max_risk_per_trade),
+            max_positions: self.trend_max_positions.unwrap_or(trend.max_positions),
+            max_total_leverage: d(self.trend_max_leverage, trend.max_total_leverage),
+            breakout_hours: self.trend_breakout_hours.unwrap_or(trend.breakout_hours),
+            exit_hours: self.trend_exit_hours.unwrap_or(trend.exit_hours),
+            stop_atr: d(self.trend_stop_atr, trend.stop_atr),
+            ..trend.clone()
+        }
+        .sanitized();
+        let r = ReboundConfig {
+            enabled: self.rebound_enabled.unwrap_or(rebound.enabled),
+            entry_rsi: d(self.rebound_entry_rsi, rebound.entry_rsi),
+            exit_rsi: d(self.rebound_exit_rsi, rebound.exit_rsi),
+            max_hold_hours: self.rebound_max_hold_hours.unwrap_or(rebound.max_hold_hours),
+            risk_per_trade: d(self.rebound_risk_per_trade, rebound.risk_per_trade),
+            max_positions: self.rebound_max_positions.unwrap_or(rebound.max_positions),
+            live: rebound.live,
+            ..rebound.clone()
+        }
+        .sanitized();
+        (t, r)
     }
 }
 
@@ -146,7 +203,7 @@ fn entry_notional(
 /// (RSI 1h < 20) y vende al rebotar (RSI > 50) o tras 48 h. Validada en
 /// tools/backtest/dips.py (positiva en ambas mitades, pero con pocas operaciones):
 /// por eso corre en papel salvo REBOUND_LIVE=true.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ReboundConfig {
     pub enabled: bool,
     /// Operar con dinero real (solo si además el bot está en hyperliquid_mainnet)
@@ -183,15 +240,24 @@ impl ReboundConfig {
         Self {
             enabled: var("REBOUND_ENABLED").unwrap_or(d.enabled),
             live: var("REBOUND_LIVE").unwrap_or(d.live),
-            entry_rsi: var::<Decimal>("REBOUND_ENTRY_RSI").unwrap_or(d.entry_rsi).max(dec!(5)).min(dec!(40)),
-            exit_rsi: var::<Decimal>("REBOUND_EXIT_RSI").unwrap_or(d.exit_rsi).max(dec!(30)).min(dec!(80)),
-            max_hold_hours: var::<u64>("REBOUND_MAX_HOLD_HOURS").unwrap_or(d.max_hold_hours).clamp(4, 240),
+            entry_rsi: var::<Decimal>("REBOUND_ENTRY_RSI").unwrap_or(d.entry_rsi),
+            exit_rsi: var::<Decimal>("REBOUND_EXIT_RSI").unwrap_or(d.exit_rsi),
+            max_hold_hours: var::<u64>("REBOUND_MAX_HOLD_HOURS").unwrap_or(d.max_hold_hours),
             stop_atr: d.stop_atr,
-            risk_per_trade: var::<Decimal>("REBOUND_RISK_PER_TRADE")
-                .unwrap_or(d.risk_per_trade)
-                .max(dec!(0.001))
-                .min(dec!(0.02)),
-            max_positions: var::<usize>("REBOUND_MAX_POSITIONS").unwrap_or(d.max_positions).clamp(0, 5),
+            risk_per_trade: var::<Decimal>("REBOUND_RISK_PER_TRADE").unwrap_or(d.risk_per_trade),
+            max_positions: var::<usize>("REBOUND_MAX_POSITIONS").unwrap_or(d.max_positions),
+        }
+        .sanitized()
+    }
+
+    pub fn sanitized(self) -> Self {
+        Self {
+            entry_rsi: self.entry_rsi.max(dec!(5)).min(dec!(40)),
+            exit_rsi: self.exit_rsi.max(dec!(30)).min(dec!(80)),
+            max_hold_hours: self.max_hold_hours.clamp(4, 240),
+            risk_per_trade: self.risk_per_trade.max(dec!(0.001)).min(dec!(0.02)),
+            max_positions: self.max_positions.clamp(0, 5),
+            ..self
         }
     }
 }
@@ -284,6 +350,10 @@ pub struct TrendTrader {
     rebound_cfg: ReboundConfig,
     rebound: HashMap<String, ReboundPosition>,
     rebound_file: std::path::PathBuf,
+    /// Configuración editable desde el dashboard (se aplica en cada evaluación)
+    shared_cfg: Arc<RwLock<(TrendConfig, ReboundConfig)>>,
+    /// Pausa de nuevas entradas (las posiciones abiertas se siguen gestionando)
+    paused: Arc<AtomicBool>,
 }
 
 impl TrendTrader {
@@ -297,8 +367,10 @@ impl TrendTrader {
         mainnet: bool,
         initial_capital: Decimal,
         rebound_cfg: ReboundConfig,
+        paused: bool,
     ) -> Self {
         let states = symbols.iter().map(|s| (s.clone(), CoinState::default())).collect();
+        let cfg_for_share = cfg.clone();
         let data_dir = std::env::var("DATA_DIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
@@ -327,6 +399,8 @@ impl TrendTrader {
             last_eval_hour: 0,
             paper_equity: initial_capital,
             halted: false,
+            shared_cfg: Arc::new(RwLock::new((cfg_for_share, rebound_cfg.clone()))),
+            paused: Arc::new(AtomicBool::new(paused)),
             rebound_cfg,
             rebound,
             rebound_file,
@@ -335,6 +409,18 @@ impl TrendTrader {
 
     pub fn symbols_handle(&self) -> Arc<RwLock<Vec<String>>> {
         self.symbols.clone()
+    }
+
+    pub fn config_handle(&self) -> Arc<RwLock<(TrendConfig, ReboundConfig)>> {
+        self.shared_cfg.clone()
+    }
+
+    pub fn paused_handle(&self) -> Arc<AtomicBool> {
+        self.paused.clone()
+    }
+
+    pub fn is_live(&self) -> bool {
+        self.live
     }
 
     pub fn client(&self) -> Arc<HyperliquidClient> {
@@ -411,8 +497,17 @@ impl TrendTrader {
         let hour = now / HOUR_MS;
         if hour != self.last_eval_hour && now % HOUR_MS >= EVAL_DELAY_MS {
             self.last_eval_hour = hour;
+            self.refresh_config().await;
             self.evaluate_all().await;
         }
+    }
+
+    /// Toma la configuración editada desde el dashboard (no cambia el modo real/papel)
+    async fn refresh_config(&mut self) {
+        let (t, r) = self.shared_cfg.read().await.clone();
+        let live = self.rebound_cfg.live;
+        self.cfg = t;
+        self.rebound_cfg = ReboundConfig { live, ..r };
     }
 
     pub async fn stop(&mut self) {
@@ -523,7 +618,12 @@ impl TrendTrader {
 
         // 4. Entradas, las rupturas más fuertes primero
         candidates.sort_by(|a, b| b.1.strength().cmp(&a.1.strength()));
+        let paused = self.paused.load(Ordering::Relaxed);
         for (symbol, signal) in candidates {
+            if paused {
+                info!("⏸️ {}: ruptura ignorada (bot en pausa)", symbol);
+                continue;
+            }
             if open_count >= self.cfg.max_positions {
                 info!("⏸️ {}: ruptura ignorada, máximo de {} posiciones", symbol, self.cfg.max_positions);
                 continue;
@@ -958,7 +1058,12 @@ impl TrendTrader {
             .collect();
         candidates.sort_by(|a, b| a.1.rsi.cmp(&b.1.rsi));
 
+        let paused = self.paused.load(Ordering::Relaxed);
         for (symbol, sig) in candidates {
+            if paused {
+                info!("⏸️ {}: sobreventa (RSI {:.0}) ignorada (bot en pausa)", symbol, sig.rsi);
+                continue;
+            }
             if self.rebound.len() >= self.rebound_cfg.max_positions {
                 info!(
                     "⏸️ {}: sobreventa (RSI {:.0}) ignorada, máximo de {} posiciones de rebote",
@@ -1319,6 +1424,28 @@ mod tests {
             })
             .collect();
         assert!(compute_signal(&up, &cfg).unwrap().rsi > dec!(80));
+    }
+
+    #[test]
+    fn overrides_are_applied_with_safety_limits_and_never_enable_live() {
+        let t = TrendConfig::default();
+        let r = ReboundConfig::default();
+        let o = StrategyOverrides {
+            trend_risk_per_trade: Some(0.5), // absurdo: se limita a 2%
+            trend_max_positions: Some(3),
+            rebound_enabled: Some(false),
+            rebound_entry_rsi: Some(1.0), // se limita a 5
+            ..Default::default()
+        };
+        let (t2, r2) = o.apply(&t, &r);
+        assert_eq!(t2.risk_per_trade, dec!(0.02));
+        assert_eq!(t2.max_positions, 3);
+        assert!(!r2.enabled);
+        assert_eq!(r2.entry_rsi, dec!(5));
+        assert!(!r2.live);
+        // Sin ajustes: igual que antes
+        let (t3, _) = StrategyOverrides::default().apply(&t, &r);
+        assert_eq!(t3.risk_per_trade, t.risk_per_trade);
     }
 
     #[test]

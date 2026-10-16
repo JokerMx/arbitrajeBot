@@ -261,6 +261,40 @@ impl ConfigRepository {
         }
     }
     
+    /// Valor de configuración genérico (BOT_config), `None` si no existe
+    pub async fn get_config_value(&self, key: &str) -> Result<Option<String>> {
+        let table = format!("{}config", self.table_prefix);
+        let row = sqlx::query(&format!("SELECT config_value FROM `{}` WHERE config_key = ?", table))
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|r| r.get::<String, _>(0)))
+    }
+
+    pub async fn set_config_value(&self, key: &str, value: &str, kind: &str) -> Result<()> {
+        let table = format!("{}config", self.table_prefix);
+        sqlx::query(&format!(
+            r#"INSERT INTO `{}` (config_key, config_value, config_type) VALUES (?, ?, ?)
+               ON DUPLICATE KEY UPDATE config_value = VALUES(config_value)"#,
+            table
+        ))
+        .bind(key)
+        .bind(value)
+        .bind(kind)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete_config_value(&self, key: &str) -> Result<()> {
+        let table = format!("{}config", self.table_prefix);
+        sqlx::query(&format!("DELETE FROM `{}` WHERE config_key = ?", table))
+            .bind(key)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     /// Monedas de la estrategia de tendencia elegidas en el dashboard.
     /// `None` = no hay selección guardada (se usa TREND_SYMBOLS del .env).
     pub async fn get_trend_symbols(&self) -> Result<Option<Vec<String>>> {

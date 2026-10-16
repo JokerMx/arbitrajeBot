@@ -18,7 +18,7 @@ use crate::executor::OrderExecutor;
 use crate::notifier::TelegramNotifier;
 use crate::executor::ExchangeType;
 use crate::hyperliquid::HyperliquidClient;
-use crate::trend::{env_symbols, ReboundConfig, TrendConfig, TrendTrader};
+use crate::trend::{env_symbols, ReboundConfig, StrategyOverrides, TrendConfig, TrendTrader};
 
 #[derive(Clone)]
 pub struct TradingBot {
@@ -63,6 +63,8 @@ impl TradingBot {
         risk_manager: Arc<Mutex<RiskManager>>,
         exchange_type: ExchangeType,
         trend_symbols_override: Option<Vec<String>>,
+        strategy_overrides: Option<StrategyOverrides>,
+        trading_paused: bool,
     ) -> anyhow::Result<Self> {
         info!("Inicializando TradingBot en red: {}", config.network);
         
@@ -111,8 +113,14 @@ impl TradingBot {
             if !live {
                 warn!("📄 Tendencia en modo PAPEL (EXCHANGE_TYPE no es hyperliquid_mainnet): sin órdenes reales");
             }
+            let (trend_cfg, rebound_cfg) = strategy_overrides
+                .unwrap_or_default()
+                .apply(&TrendConfig::from_env(), &ReboundConfig::from_env());
+            if trading_paused {
+                warn!("⏸️ Bot en PAUSA (desde el dashboard): no abrirá nuevas posiciones");
+            }
             trend = Some(TrendTrader::new(
-                TrendConfig::from_env(),
+                trend_cfg,
                 symbols,
                 hyperliquid_client.clone(),
                 risk_manager.clone(),
@@ -120,7 +128,8 @@ impl TradingBot {
                 live,
                 !is_testnet,
                 initial_capital,
-                ReboundConfig::from_env(),
+                rebound_cfg,
+                trading_paused,
             ));
         }
 
@@ -168,6 +177,25 @@ impl TradingBot {
     /// Lista compartida de monedas de la estrategia de tendencia (None si no está activa)
     pub fn trend_symbols_handle(&self) -> Option<Arc<tokio::sync::RwLock<Vec<String>>>> {
         self.trend.as_ref().map(|t| t.symbols_handle())
+    }
+
+    pub fn trend_config_handle(
+        &self,
+    ) -> Option<Arc<tokio::sync::RwLock<(TrendConfig, ReboundConfig)>>> {
+        self.trend.as_ref().map(|t| t.config_handle())
+    }
+
+    pub fn paused_handle(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+        self.trend.as_ref().map(|t| t.paused_handle())
+    }
+
+    /// "trend" o "market_making"
+    pub fn strategy_mode(&self) -> &'static str {
+        if self.trend.is_some() { "trend" } else { "market_making" }
+    }
+
+    pub fn trend_is_live(&self) -> bool {
+        self.trend.as_ref().map_or(false, |t| t.is_live())
     }
 
     /// Cliente de mercado (precios) cuando la estrategia de tendencia está activa

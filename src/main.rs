@@ -1,5 +1,5 @@
 // warp: la cadena de rutas .or() supera el límite de recursión por defecto
-#![recursion_limit = "256"]
+#![recursion_limit = "512"]
 //! Hyperliquid Market Making Bot - PRODUCCIÓN MAINNET (API REST + firma)
 
 use dotenv::dotenv;
@@ -257,6 +257,20 @@ async fn main() -> anyhow::Result<()> {
             warn!("No se pudo leer trend_symbols de la BD: {}", e);
             None
         }),
+        // Ajustes de estrategia hechos en el dashboard
+        config_repo
+            .get_config_value("strategy_overrides")
+            .await
+            .ok()
+            .flatten()
+            .and_then(|s| serde_json::from_str(&s).ok()),
+        // Pausa de entradas activada desde el dashboard
+        config_repo
+            .get_config_value("trading_paused")
+            .await
+            .ok()
+            .flatten()
+            .map_or(false, |v| v == "true"),
     )
     .await?;
     let bot = Arc::new(Mutex::new(bot));

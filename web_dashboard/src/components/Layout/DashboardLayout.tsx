@@ -15,7 +15,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
 }) => {
   return (
     <div className="min-h-screen bg-dark-100 text-white">
-      <Header />
+      <Header onNavigate={onNavigate} />
       <Sidebar onNavigate={onNavigate} currentView={currentView}>
         {children}
       </Sidebar>

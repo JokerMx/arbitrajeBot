@@ -60,6 +60,17 @@ impl RiskManager {
         }
     }
 
+    /// Cambia los límites de riesgo en vivo (desde el dashboard)
+    pub fn set_config(&mut self, config: RiskConfig) {
+        info!(
+            "🛡️ Límites de riesgo: pérdida diaria {:.1}%, drawdown máx {:.1}%, kill switch {}",
+            config.max_daily_loss_pct * 100.0,
+            config.max_drawdown_pct * 100.0,
+            config.kill_switch_enabled
+        );
+        self.config = config;
+    }
+
     pub fn set_protection(&mut self, protection: ProtectionConfigDB) {
         let max_risk = protection.max_capital_at_risk_pct.to_f64().unwrap_or(0.0) * 100.0;
         let stop_loss = protection.auto_stop_loss_pct.to_f64().unwrap_or(0.0) * 100.0;

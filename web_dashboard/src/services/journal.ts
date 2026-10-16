@@ -17,6 +17,8 @@ export interface ClosedTrade {
   r: number | null;
   notional: number | null;
   pnl_usd: number | null;
+  /** Resultado como % del capital antes de la operación */
+  account_pct: number | null;
   reason: string;
 }
 
@@ -119,6 +121,32 @@ export const duration = (hours: number) => {
 
 export const pnlColor = (n: number | null | undefined) =>
   n === null || n === undefined || n === 0 ? "text-gray-300" : n > 0 ? "text-success" : "text-danger";
+
+/** Descarga las operaciones cerradas como CSV (abre bien en Excel) */
+export function downloadTradesCsv(trades: ClosedTrade[]) {
+  const head = [
+    "id", "apertura", "cierre", "moneda", "estrategia", "papel", "entrada", "salida",
+    "horas", "tamano_usd", "pnl_usd", "pnl_precio_pct", "pnl_cuenta_pct", "r", "motivo",
+  ];
+  const esc = (v: unknown) => {
+    const s = v === null || v === undefined ? "" : String(v);
+    return /[";\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const rows = trades.map((t) =>
+    [
+      t.id, t.opened_at, t.closed_at, t.symbol, t.strategy, t.paper ? "si" : "no", t.entry, t.exit,
+      t.hours.toFixed(2), t.notional?.toFixed(2), t.pnl_usd?.toFixed(2), t.pnl_pct.toFixed(4),
+      t.account_pct?.toFixed(4), t.r?.toFixed(3), t.reason,
+    ].map(esc).join(";")
+  );
+  const blob = new Blob(["\ufeff" + [head.join(";"), ...rows].join("\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `operaciones_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 export const STRATEGY_LABEL: Record<string, string> = {
   tendencia: "Tendencia",
