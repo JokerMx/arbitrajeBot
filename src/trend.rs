@@ -63,7 +63,13 @@ pub struct TrendConfig {
     pub max_positions: usize,
     /// Precio límite de la entrada IOC sobre el mid
     pub entry_slippage: Decimal,
+    /// No entrar si el funding medio de 24 h supera 2x el normal (mercado sobrecomprado).
+    /// Validado en tools/backtest/trend_filters.py: mejora ambas mitades.
+    pub funding_filter: bool,
 }
+
+/// Funding "normal" de Hyperliquid por hora (0,00125% ≈ 11% anual)
+pub const BASE_FUNDING_HOURLY: Decimal = dec!(0.0000125);
 
 impl Default for TrendConfig {
     fn default() -> Self {
@@ -78,6 +84,7 @@ impl Default for TrendConfig {
             max_total_leverage: dec!(3),
             max_positions: 4,
             entry_slippage: dec!(0.005),
+            funding_filter: true,
         }
     }
 }
@@ -99,6 +106,7 @@ impl TrendConfig {
             max_total_leverage: var("TREND_MAX_LEVERAGE").unwrap_or(d.max_total_leverage),
             max_positions: var("TREND_MAX_POSITIONS").unwrap_or(d.max_positions),
             entry_slippage: d.entry_slippage,
+            funding_filter: var("TREND_FUNDING_FILTER").unwrap_or(d.funding_filter),
         };
         cfg.sanitized()
     }
@@ -131,6 +139,7 @@ pub struct StrategyOverrides {
     pub trend_breakout_hours: Option<usize>,
     pub trend_exit_hours: Option<usize>,
     pub trend_stop_atr: Option<f64>,
+    pub trend_funding_filter: Option<bool>,
     pub rebound_enabled: Option<bool>,
     pub rebound_entry_rsi: Option<f64>,
     pub rebound_exit_rsi: Option<f64>,
@@ -153,6 +162,7 @@ impl StrategyOverrides {
             breakout_hours: self.trend_breakout_hours.unwrap_or(trend.breakout_hours),
             exit_hours: self.trend_exit_hours.unwrap_or(trend.exit_hours),
             stop_atr: d(self.trend_stop_atr, trend.stop_atr),
+            funding_filter: self.trend_funding_filter.unwrap_or(trend.funding_filter),
             ..trend.clone()
         }
         .sanitized();
@@ -735,6 +745,22 @@ impl TrendTrader {
         if dist <= Decimal::ZERO || sig.close <= Decimal::ZERO {
             return None;
         }
+        if self.cfg.funding_filter {
+            match self.avg_funding_24h(symbol).await {
+                Ok(f) if f > BASE_FUNDING_HOURLY * dec!(2) => {
+                    info!(
+                        "⏸️ {}: ruptura ignorada por funding alto ({:.4}%/h, {:.0}% anual; límite 2x normal)",
+                        symbol,
+                        f * dec!(100),
+                        f * dec!(100) * dec!(8760)
+                    );
+                    return None;
+                }
+                Ok(_) => {}
+                // Sin dato de funding no se bloquea la entrada
+                Err(e) => warn!("{}: no se pudo leer el funding ({}); se ignora el filtro", symbol, e),
+            }
+        }
         let stop_frac = dist / sig.close;
         let room = equity * self.cfg.max_total_leverage - used;
         let notional = match entry_notional(
@@ -1295,6 +1321,26 @@ impl TrendTrader {
         Ok(out)
     }
 
+    /// Funding medio por hora de las últimas 24 h (API pública de Hyperliquid)
+    async fn avg_funding_24h(&self, symbol: &str) -> anyhow::Result<Decimal> {
+        #[derive(Deserialize)]
+        struct F {
+            #[serde(rename = "fundingRate")]
+            funding_rate: String,
+        }
+        let body = serde_json::json!({
+            "type": "fundingHistory",
+            "coin": symbol,
+            "startTime": now_ms().saturating_sub(24 * HOUR_MS),
+        });
+        let rows: Vec<F> = self.http.post(self.info_url).json(&body).send().await?.json().await?;
+        let rates: Vec<Decimal> = rows.iter().filter_map(|r| r.funding_rate.parse().ok()).collect();
+        if rates.is_empty() {
+            anyhow::bail!("sin datos");
+        }
+        Ok(rates.iter().sum::<Decimal>() / Decimal::from(rates.len() as u64))
+    }
+
     fn asset(&self, symbol: &str) -> Option<u32> {
         self.client.get_market_info(symbol).map(|m| m.index as u32)
     }
@@ -1440,6 +1486,7 @@ mod tests {
         let (t2, r2) = o.apply(&t, &r);
         assert_eq!(t2.risk_per_trade, dec!(0.02));
         assert_eq!(t2.max_positions, 3);
+        assert!(t2.funding_filter); // activo por defecto
         assert!(!r2.enabled);
         assert_eq!(r2.entry_rsi, dec!(5));
         assert!(!r2.live);

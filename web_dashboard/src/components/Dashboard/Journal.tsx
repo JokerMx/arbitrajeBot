@@ -146,10 +146,13 @@ const RANGES = [
   { key: "24h", label: "24 h", hours: 24 },
   { key: "3d", label: "3 días", hours: 72 },
   { key: "7d", label: "7 días", hours: 168 },
+  { key: "30d", label: "30 días", hours: 720 },
 ] as const;
 
 export const EquityCurve: React.FC<{ j: Journal; height?: number }> = ({ j, height = 256 }) => {
   const [range, setRange] = React.useState<(typeof RANGES)[number]["key"]>("3d");
+  // Escala ajustada a los datos (se aprecian movimientos de centavos) o desde el capital inicial
+  const [fit, setFit] = React.useState(true);
   const hours = RANGES.find((r) => r.key === range)!.hours;
   const since = Date.now() - hours * 3600_000;
 
@@ -177,11 +180,16 @@ export const EquityCurve: React.FC<{ j: Journal; height?: number }> = ({ j, heig
   };
 
   const values = points.map((p) => p.equity);
-  const min = Math.min(...values, j.initial_capital);
-  const max = Math.max(...values, j.initial_capital);
-  const pad = Math.max((max - min) * 0.25, j.initial_capital * 0.002);
+  const min = fit ? Math.min(...values) : Math.min(...values, j.initial_capital);
+  const max = fit ? Math.max(...values) : Math.max(...values, j.initial_capital);
+  // Margen: 15% del rango, con un mínimo pequeño para que una línea plana quede centrada
+  const pad = Math.max((max - min) * 0.15, (fit ? 0.0002 : 0.002) * j.initial_capital);
   const last = points[points.length - 1];
+  const first = points[0];
   const up = last.equity >= j.initial_capital;
+  const change = last.equity - first.equity;
+  const changePct = first.equity ? (change / first.equity) * 100 : 0;
+  const yDecimals = max - min < 5 ? 2 : 0;
   const color = up ? "#22c55e" : "#ef4444";
   const tickFmt = (ts: number) => format(new Date(ts), hours <= 24 ? "HH:mm" : "dd/MM HH:mm", { locale: es });
 
@@ -193,8 +201,19 @@ export const EquityCurve: React.FC<{ j: Journal; height?: number }> = ({ j, heig
           <p className="text-xs text-gray-400">
             Foto cada 5 min (capital + ganancias cerradas + posiciones abiertas a precio actual) · ● cierre de operación
           </p>
+          <p className={`text-sm font-mono mt-1 ${pnlColor(change)}`}>
+            {usd(change, true)} ({pct(changePct)}) en el período
+            {Math.abs(change) < 0.005 && <span className="text-gray-500 text-xs font-sans"> · sin cambios: no hubo posiciones abiertas</span>}
+          </p>
         </div>
-        <div className="flex gap-1 text-xs">
+        <div className="flex flex-wrap gap-1 text-xs">
+          <button
+            onClick={() => setFit(!fit)}
+            className="px-3 py-1 rounded-lg bg-dark-300 text-gray-300 hover:bg-dark-400 mr-2"
+            title="Escala ajustada a los datos o desde el capital inicial"
+          >
+            Escala: {fit ? "ajustada" : "desde el inicio"}
+          </button>
           {RANGES.map((r) => (
             <button
               key={r.key}
@@ -237,7 +256,8 @@ export const EquityCurve: React.FC<{ j: Journal; height?: number }> = ({ j, heig
                 stroke="#6b7280"
                 fontSize={11}
                 domain={[min - pad, max + pad]}
-                tickFormatter={(v) => `$${Number(v).toFixed(2)}`}
+                tickFormatter={(v) => `$${Number(v).toFixed(yDecimals)}`}
+                allowDataOverflow
                 width={72}
               />
               <Tooltip
@@ -248,7 +268,13 @@ export const EquityCurve: React.FC<{ j: Journal; height?: number }> = ({ j, heig
                   "Equity",
                 ]}
               />
-              <ReferenceLine y={j.initial_capital} stroke="#6b7280" strokeDasharray="4 4" />
+              <ReferenceLine
+                y={j.initial_capital}
+                stroke="#6b7280"
+                strokeDasharray="4 4"
+                ifOverflow="discard"
+                label={{ value: "capital inicial", position: "insideBottomLeft", fill: "#6b7280", fontSize: 10 }}
+              />
               <Area type="monotone" dataKey="equity" stroke={color} strokeWidth={2} fill="url(#eqFill)" dot={false} isAnimationActive={false} />
               {closes.map((c) => (
                 <ReferenceDot
@@ -538,6 +564,61 @@ export const JournalHistoryView: React.FC = () => {
   );
 };
 
+// ---------------- Resultados por hora de entrada ----------------
+const HourStats: React.FC<{ j: Journal }> = ({ j }) => {
+  // Bloques de 4 h en hora de Chile (UTC-3)
+  const blocks = [0, 4, 8, 12, 16, 20].map((start) => {
+    const trades = j.closed.filter((t) => {
+      const h = (new Date(t.opened_at).getUTCHours() + 21) % 24; // UTC-3
+      return h >= start && h < start + 4;
+    });
+    const rs = trades.map((t) => t.r).filter((r): r is number => r !== null);
+    return {
+      label: `${String(start).padStart(2, "0")}–${String(start + 4).padStart(2, "0")} h`,
+      n: trades.length,
+      win: trades.length ? trades.filter((t) => t.pnl_pct > 0).length / trades.length : null,
+      avgR: rs.length ? rs.reduce((a, b) => a + b, 0) / rs.length : null,
+      usdSum: trades.reduce((a, t) => a + (t.pnl_usd ?? 0), 0),
+    };
+  });
+  return (
+    <Card>
+      <h3 className="text-lg font-semibold mb-1">Resultados por hora de entrada</h3>
+      <p className="text-xs text-gray-500 mb-4">
+        Hora de Chile (UTC−3). Con pocas operaciones las diferencias son ruido: hacen falta al menos ~30 por bloque
+        para sacar conclusiones. En el backtest (349 operaciones) las entradas de 01–05 h fueron las peores en ambos
+        periodos.
+      </p>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-gray-400 border-b border-dark-300">
+              <th className="pb-2 pr-4">Entrada</th>
+              <th className="pb-2 pr-4">Operaciones</th>
+              <th className="pb-2 pr-4">Aciertos</th>
+              <th className="pb-2 pr-4">R medio</th>
+              <th className="pb-2">P&L</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-dark-300">
+            {blocks.map((b) => (
+              <tr key={b.label}>
+                <td className="py-2 pr-4">{b.label}</td>
+                <td className="py-2 pr-4">{b.n}</td>
+                <td className="py-2 pr-4">{b.win !== null ? `${(b.win * 100).toFixed(0)}%` : "—"}</td>
+                <td className={`py-2 pr-4 font-mono ${pnlColor(b.avgR)}`}>
+                  {b.avgR !== null ? `${b.avgR >= 0 ? "+" : ""}${b.avgR.toFixed(2)}R` : "—"}
+                </td>
+                <td className={`py-2 font-mono ${pnlColor(b.usdSum)}`}>{b.n ? usd(b.usdSum, true) : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+};
+
 // ---------------- Vista "Estadísticas" ----------------
 const MetricsTable: React.FC<{ j: Journal }> = ({ j }) => {
   const cols: [string, JournalStats][] = [["Total", j.stats], ...Object.entries(j.by_strategy).map(
@@ -619,6 +700,7 @@ export const JournalStatsView: React.FC = () => {
         </div>
         <StrategyBreakdown j={data} />
       </div>
+      <HourStats j={data} />
     </div>
   );
 };

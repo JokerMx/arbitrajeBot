@@ -110,7 +110,7 @@ ssh -L 3001:localhost:3001 usuario@servidor
 
 ## 5. Marcha blanca (2 a 4 semanas)
 
-> Antes de tocar el servidor puedes probar todo en tu PC con `docker-compose.test.yml`. Los pasos están en el [README](README.md#probar-en-5-minutos-modo-papel-con-docker).
+> Antes de tocar el servidor puedes probar todo en tu PC con `docker-compose.test.yml`. Los pasos están en el [README](README.md#probar-en-tu-pc-modo-papel-con-docker).
 
 En `.env`:
 
@@ -122,10 +122,12 @@ TREND_RISK_PER_TRADE=0.005
 
 En el log debe aparecer `Estrategia TENDENCIA (PAPEL)`. Durante este periodo:
 
-- [ ] El servicio corre 7 días seguidos sin reinicios inesperados (`systemctl status`).
+- [ ] El servicio corre 7 días seguidos sin reinicios inesperados (`systemctl status` o `docker compose ps`).
 - [ ] Cada hora aparece `📊 Tendencia: equity ...` en el log.
 - [ ] Llegan señales de entrada, de stop movido y de cierre a Telegram, coherentes con el gráfico.
-- [ ] `/performance` en Telegram y la tarjeta "Señales cerradas" del dashboard coinciden.
+- [ ] `/performance` en Telegram coincide con la sección **Estadísticas** del dashboard.
+- [ ] En el dashboard: **Pausar** y **Reanudar** desde el botón de encendido funcionan, y **Reiniciar** hace que el bot vuelva en ~30 s.
+- [ ] Un cambio en **Estrategia** o **Riesgo** queda guardado y aparece en el log en la siguiente evaluación.
 - [ ] Invitas 5–20 personas de confianza y les das Premium gratis con `/grant <id> 30` o el botón 🎁.
 - [ ] **Pruebas de pago con Stars reales:** compra `/premium` desde una segunda cuenta de Telegram. Verifica que se activa, que aparece en "Pagos" del dashboard, y que `/refund <id> <charge_id>` devuelve las Stars y quita Premium.
 - [ ] Pruebas de referido: abre `t.me/<bot>?start=ref_<tu_id>` con otra cuenta y paga; el referidor recibe los días extra.
@@ -143,7 +145,7 @@ Pasa a producción solo si la marcha blanca dio resultados razonables (mira `/pe
    NETWORK=mainnet
    TREND_RISK_PER_TRADE=0.005
    ```
-3. Reinicia con `sudo systemctl restart arbitrajebot`. En el log debe aparecer `Estrategia TENDENCIA (REAL)`.
+3. Aplica el cambio: con Docker `docker compose up -d bot` (no `restart`, que no relee el `.env`); con systemd `sudo systemctl restart arbitrajebot`. En el log debe aparecer `Estrategia TENDENCIA (REAL)`, y en el dashboard la etiqueta **REAL**.
 4. En la primera entrada real, comprueba en app.hyperliquid.xyz que la posición tiene su **stop trigger** visible en *Open Orders*.
 5. Empieza a vender Premium recién cuando tengas historial **real**.
 
@@ -151,7 +153,24 @@ Para actualizar el código: `./deploy/update.sh`. Respalda, compila, ejecuta los
 
 Para volver atrás: `git checkout <commit anterior> && ./deploy/update.sh`. Si hace falta, restaura `backups/data_*.tar.gz` en `data/`.
 
-## 7. Monetización: cómo funciona
+## 7. Operación diaria desde el dashboard
+
+La guía completa está en [docs/DASHBOARD.md](docs/DASHBOARD.md). Lo esencial:
+
+| Necesitas… | Dónde |
+|---|---|
+| Dejar de abrir posiciones (por ejemplo, ante una noticia) | Botón de encendido → **Pausar nuevas entradas**. Las abiertas siguen con su stop |
+| Cambiar el riesgo, las posiciones máximas o el filtro de funding | **Estrategia**: se aplica en la siguiente hora, sin reiniciar |
+| Cambiar la pérdida diaria máxima o el drawdown máximo | **Riesgo**: se aplica al instante |
+| Agregar o quitar monedas | **Mercados** |
+| Ver todas las operaciones o exportarlas a Excel | **Historial** → CSV |
+| Cambiar el capital simulado o la configuración de Telegram | **Configuración**, y luego **Reiniciar bot** |
+
+Lo que **no** se puede hacer desde el dashboard, a propósito: pasar a dinero real (`.env`) y cerrar posiciones a mano (app.hyperliquid.xyz).
+
+**Windows con Docker Desktop:** asigna al menos 8 GB a Docker en `%USERPROFILE%\.wslconfig` (`memory=8GB`) y ejecuta `wsl --shutdown`. Con 4 GB, la compilación de Rust puede quedar bloqueada en el enlazado.
+
+## 8. Monetización: cómo funciona
 
 | Elemento | Detalle |
 |---|---|
@@ -165,7 +184,7 @@ Para volver atrás: `git checkout <commit anterior> && ./deploy/update.sh`. Si h
 
 Las Stars se retiran desde Telegram vía Fragment, después del periodo de retención que fija Telegram.
 
-## 8. Responsabilidad legal
+## 9. Responsabilidad legal
 
 - Cada señal y `/terms` incluyen el aviso de que no es asesoría financiera. No lo quites, y no prometas rentabilidad en la publicidad.
 - `/performance` indica si incluye operaciones en papel. Publica resultados reales cuando los tengas.

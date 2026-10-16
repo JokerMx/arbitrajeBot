@@ -1,160 +1,160 @@
 # ArbitrajeBot
 
-Bot de trading para **Hyperliquid** escrito en Rust. Incluye un dashboard web y un bot de Telegram que vende **señales Premium** cobradas con Telegram Stars.
+Bot de trading para **Hyperliquid** escrito en Rust, con dashboard web y un bot de Telegram que vende **señales Premium** cobradas con Telegram Stars.
 
-- **Estrategia complementaria "rebote":** compra monedas en sobreventa extrema (RSI 1h < 20) y vende al rebotar o a las 48 h. Da actividad en mercados bajistas; corre en papel salvo `REBOUND_LIVE=true`.
-- **Estrategia por defecto:** seguimiento de tendencia en velas de 1h. Entra cuando el precio rompe el máximo de 7 días, solo en largo, con un stop de 3 ATR que sube con el precio y vive en el propio exchange. Arriesga un porcentaje fijo del capital por operación. El market making sigue disponible (`STRATEGY_MODE=market_making`), aunque en los backtests no mostró ventaja.
-- **Modo papel:** si `EXCHANGE_TYPE` no es `hyperliquid_mainnet`, el bot calcula las mismas señales con datos reales pero no envía órdenes.
-- **Telegram:** los usuarios Free reciben un aviso inmediato y el detalle con retraso. Premium recibe la señal al instante. Incluye prueba gratis, referidos, historial de resultados y panel de administración.
+> ⚠️ Software experimental. Puede operar con dinero real y los backtests no garantizan resultados. Lee [PUESTA_EN_MARCHA.md](PUESTA_EN_MARCHA.md) antes de usarlo en producción.
 
-> ⚠️ Software experimental que opera con dinero real. Los backtests no garantizan resultados. Lee [PUESTA_EN_MARCHA.md](PUESTA_EN_MARCHA.md) antes de usarlo en producción.
+## Qué hace
+
+| Pieza | Descripción |
+|---|---|
+| **Estrategia de tendencia** (principal) | Velas de 1h. Compra cuando el precio rompe su máximo de 7 días, solo en largo. Stop de 3 ATR que sube con el precio y vive en el propio exchange. Arriesga un % fijo del capital por operación |
+| **Estrategia de rebote** (complementaria) | Compra en sobreventa extrema (RSI 1h < 20) y vende al rebotar (RSI > 50) o a las 48 h. Opera en caídas, cuando la tendencia está quieta. **Siempre en papel** salvo `REBOUND_LIVE=true` |
+| **Modo papel** | Con `EXCHANGE_TYPE=simulated` calcula las mismas señales con datos reales, pero no envía órdenes |
+| **Dashboard web** | Operaciones, estadísticas, control del bot y configuración en vivo. Guía en [docs/DASHBOARD.md](docs/DASHBOARD.md) |
+| **Telegram** | Free recibe aviso inmediato y detalle con retraso; Premium, la señal al instante. Prueba gratis, referidos, pagos con Stars y panel de administración |
+| **Market making** (no recomendado) | Avellaneda-Stoikov, disponible con `STRATEGY_MODE=market_making`. No mostró ventaja en los backtests |
+
+Cómo funcionan las estrategias y qué dijeron los backtests: [docs/ESTRATEGIAS.md](docs/ESTRATEGIAS.md).
 
 ---
 
-## Probar en 5 minutos (modo papel, con Docker)
+## Probar en tu PC (modo papel, con Docker)
 
-No necesitas Rust instalado. Este entorno **no usa tu `.env` real**, no envía órdenes y crea su propia base de datos desechable.
-
-**Atajo, un solo comando** (Git Bash o Linux): prepara `.env.test`, compila el dashboard si cambió, levanta todo, espera a que el bot esté listo y verifica la API.
+No necesitas Rust. Este entorno **no usa tu `.env` real**, no envía órdenes y crea su propia base de datos.
 
 ```bash
-./probar.sh            # levantar y verificar
+./probar.sh            # prepara .env.test, compila el dashboard si cambió, levanta todo y verifica la API
 ./probar.sh logs       # seguir el log
 ./probar.sh reset      # tras poner/cambiar TELEGRAM_BOT_TOKEN en .env.test
 ./probar.sh stop       # detener
 ```
 
-Paso a paso, si prefieres hacerlo a mano:
-
-```bash
-# 1. Variables de prueba
-cp .env.test.example .env.test
-#    - PRIVATE_KEY: genera una clave desechable sin fondos:
-python -c "import secrets;print('0x'+secrets.token_hex(32))"
-#    - Opcional: TELEGRAM_BOT_TOKEN de un bot de PRUEBA (@BotFather) y tu TELEGRAM_CHAT_ID (@userinfobot)
-
-# 2. Compilar el dashboard (una vez, o cuando cambie)
-cd web_dashboard && npm install && npm run build && cd ..
-
-# 3. Levantar BD + bot (la primera compilación tarda ~15-20 min; después, segundos)
-docker compose -f docker-compose.test.yml up -d
-docker compose -f docker-compose.test.yml logs -f bot
-```
-
-Cuando el log muestre `📊 Tendencia: equity $50.00 ...`, el bot está funcionando:
-
 | Qué probar | Cómo |
 |---|---|
 | Dashboard | http://localhost:3001/dashboard/ (token: `test-local`) |
-| API sin token → 401 | `curl -i http://localhost:3001/api/stats` |
-| API con token | `curl -H "Authorization: Bearer test-local" http://localhost:3001/api/stats` |
-| Rendimiento de señales | `curl -H "Authorization: Bearer test-local" http://localhost:3001/api/signals/performance` |
-| Telegram (si configuraste el bot de prueba) | `/start`, `/trial`, `/signals`, `/performance`, `/premium` |
-| Pago real barato | `/premium` cuesta 1 ⭐ en `.env.test`. Después, `/refund <tu_id> <charge_id>` (el charge_id aparece en la tabla de pagos del dashboard) |
-| Ver entradas rápido | En `.env.test` descomenta `TREND_BREAKOUT_HOURS=24` y `TREND_EXIT_HOURS=6`, luego `docker compose -f docker-compose.test.yml up -d` |
+| API sin token → 401 | `curl -i http://localhost:3001/api/bot/status` |
+| API con token | `curl -H "Authorization: Bearer test-local" http://localhost:3001/api/journal` |
+| Telegram (con un bot de **prueba** de @BotFather) | `/start`, `/trial`, `/signals`, `/performance`, `/premium` (cuesta 1 ⭐ en `.env.test`) |
+| Ver entradas rápido | En `.env.test` descomenta `TREND_BREAKOUT_HOURS=24` y `TREND_EXIT_HOURS=6` |
 
-Para detener el entorno:
+> `probar.sh` usa el puerto 3001, igual que el bot de producción en Docker: no pueden correr a la vez.
+> El token de Telegram se guarda en la base de datos la primera vez; si lo cambias, usa `./probar.sh reset`.
 
-```bash
-docker compose -f docker-compose.test.yml down      # conserva BD y datos de prueba
-docker compose -f docker-compose.test.yml down -v   # borra todo lo de prueba
-```
+## Producción
 
-> El token de Telegram se guarda en la base de datos la primera vez que arranca el bot. Si después lo cambias en `.env.test`, borra la BD de prueba con `down -v` para que se aplique.
-
-## Tests y backtests
+### Con Docker (recomendado)
 
 ```bash
-# Tests unitarios (con Rust >= 1.91 instalado)
-cargo test --locked
-
-# ...o con Docker, sin instalar Rust (Linux / macOS)
-docker run --rm -v "$PWD:/app" -v arbibot-target:/target -v arbibot-cargo:/usr/local/cargo/registry   -e CARGO_TARGET_DIR=/target -w /app rust:1 cargo test --locked
-
-# ...en Windows con Git Bash
-MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/app" -v arbibot-target:/target -v arbibot-cargo:/usr/local/cargo/registry   -e CARGO_TARGET_DIR=/target -w /app rust:1 cargo test --locked
-
-# Backtests con datos públicos de Hyperliquid (Python 3, sin dependencias)
-cd tools/backtest
-python fetch_research.py        # velas 1h + funding de las 15 monedas con más volumen
-python trend.py                 # estrategias de tendencia con validación en dos mitades
-python portfolio.py             # simulación de una cuenta de $50 vs buy & hold
-python funding_stats.py         # funding anualizado por moneda
-```
-
-En Windows, sin `MSYS_NO_PATHCONV=1` Git Bash convierte `/app` y `/target` en rutas de Windows y el comando falla.
-
-## Producción con Docker
-
-```bash
-cp .env-example .env          # completar; para la BD incluida define DB_PASSWORD y DATABASE_URL=...@db:3306/arbibot
-docker compose --profile db up -d --build     # bot + MariaDB
-docker compose up -d --build                  # solo el bot (usa tu DATABASE_URL)
+cp .env-example .env          # completar (ver tabla de abajo)
+docker compose --profile db up -d --build     # bot + MariaDB incluida
+docker compose up -d --build                  # solo el bot, con tu propia DATABASE_URL
 docker compose logs -f bot
 ```
 
-La imagen se construye por etapas (Node → Rust → Debian slim), corre sin root, se reinicia sola y guarda los datos en el volumen `botdata`. Detalles en [PUESTA_EN_MARCHA.md](PUESTA_EN_MARCHA.md#opción-a-docker-recomendada-si-el-servidor-ya-tiene-docker).
+- **Imagen:** se construye por etapas (Node → Rust → Debian slim, ~165 MB), corre sin root, se reinicia sola y guarda los datos en el volumen `botdata`.
+- **Aplicar cambios del `.env`:** `docker compose up -d bot`. `restart` no vuelve a leer el `.env`.
+- **Aplicar cambios de código:** `docker compose up -d --build bot`.
 
-## Producción sin Docker (systemd)
-
-Resumen (los detalles, el checklist de marcha blanca y la seguridad están en [PUESTA_EN_MARCHA.md](PUESTA_EN_MARCHA.md)):
+### Sin Docker (systemd)
 
 ```bash
-cp .env-example .env && chmod 600 .env       # completar
+cp .env-example .env && chmod 600 .env
 cargo build --release --locked && cargo test --release --locked
 (cd web_dashboard && npm ci && npm run build)
 sudo cp deploy/arbitrajebot.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now arbitrajebot
-journalctl -u arbitrajebot -f
 ```
 
-Para actualizar: `./deploy/update.sh`. Para respaldar los datos: `./deploy/backup.sh`. Para el desarrollo diario sigue disponible `./run.sh`.
+Para actualizar: `./deploy/update.sh`. Para respaldar: `./deploy/backup.sh`. Los detalles, la seguridad y el checklist de marcha blanca están en [PUESTA_EN_MARCHA.md](PUESTA_EN_MARCHA.md).
 
-## Configuración principal (`.env`)
+## Configuración (`.env`)
+
+Lo marcado con 🖥️ también se puede cambiar desde el dashboard: se guarda en la base de datos y tiene prioridad sobre el `.env`.
 
 | Variable | Para qué sirve |
 |---|---|
-| `EXCHANGE_TYPE` | `simulated` (papel) o `hyperliquid_mainnet` (dinero real) |
+| `EXCHANGE_TYPE` | `simulated` (papel) o `hyperliquid_mainnet` (**dinero real**). Solo se cambia aquí, nunca desde la web |
 | `PRIVATE_KEY` / `WALLET` | Clave que firma (idealmente una API wallet sin permiso de retiro) y cuenta principal |
+| `INITIAL_CAPITAL` 🖥️ | Capital base en papel (se aplica al reiniciar) |
 | `STRATEGY_MODE` | `trend` (por defecto) o `market_making` |
-| `TREND_SYMBOLS` | Monedas por defecto, p. ej. `BTC,ETH,SOL`. Se pueden cambiar en vivo desde **Dashboard → Mercados**; esa selección se guarda en la BD y tiene prioridad (botón "Usar .env" para volver) |
-| `TREND_RISK_PER_TRADE` | Fracción del capital arriesgada por operación (0.005 = 0,5%; máximo 2%) |
-| `TREND_MAX_RISK_PER_TRADE` | Tope de riesgo al subir una posición chica al mínimo de $10 (por defecto 1,25%) |
-| `TREND_MAX_POSITIONS` / `TREND_MAX_LEVERAGE` | Límites de cartera |
-| `REBOUND_ENABLED` / `REBOUND_LIVE` | Estrategia complementaria de rebote (compra en sobreventa, RSI < 20). Por defecto activa y **en papel** aunque el bot opere real |
-| `REBOUND_RISK_PER_TRADE`, `REBOUND_MAX_POSITIONS` | Riesgo (0,5%) y posiciones máximas (2) del rebote |
-| `ADMIN_API_TOKEN` | Token de la API y del dashboard. **Obligatorio en producción** |
+| `TREND_SYMBOLS` 🖥️ | Monedas, p. ej. `BTC,ETH,SOL` |
+| `TREND_RISK_PER_TRADE` 🖥️ | % del capital arriesgado por operación (0.005 = 0,5%; máximo 2%) |
+| `TREND_MAX_RISK_PER_TRADE` 🖥️ | Tope de riesgo al subir una posición chica al mínimo de $10 (1,25%) |
+| `TREND_MAX_POSITIONS` / `TREND_MAX_LEVERAGE` 🖥️ | Límites de cartera |
+| `REBOUND_ENABLED` 🖥️ / `REBOUND_LIVE` | Estrategia de rebote; `REBOUND_LIVE=true` la pasa a real (solo por `.env`) |
+| `REBOUND_RISK_PER_TRADE`, `REBOUND_MAX_POSITIONS` 🖥️ | Riesgo (0,5%) y posiciones máximas (2) del rebote |
+| `ADMIN_API_TOKEN` | Token de la API y del dashboard. **Obligatorio en producción** (`openssl rand -hex 32`) |
 | `API_BIND` / `API_PORT` | Dirección y puerto de la API (`127.0.0.1:3001` por defecto) |
-| `DATA_DIR` | Carpeta de `subscribers.json`, `payments.json` y `signals_history.json` |
+| `DATA_DIR` | Carpeta de usuarios, pagos, historial de señales y foto de equity |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` 🖥️ | Bot de Telegram y tu chat de administrador |
 | `PREMIUM_PRICE_STARS`, `TRIAL_DAYS`, `REFERRAL_BONUS_DAYS`, `FREE_SIGNAL_DELAY_HOURS` | Monetización |
 | `PAYSUPPORT_CONTACT` | Contacto para `/paysupport`; Telegram lo exige en bots que cobran |
 
 La lista completa está en [.env-example](.env-example).
 
+## API
+
+Todas las rutas `/api` exigen `Authorization: Bearer <ADMIN_API_TOKEN>`.
+
+| Ruta | Uso |
+|---|---|
+| `GET /api/bot/status` | Estado: operando/pausa, papel/real, tiempo activo, riesgo |
+| `POST /api/bot/stop` · `/api/bot/start` | Pausar / reanudar **nuevas entradas** (las posiciones abiertas se siguen gestionando) |
+| `POST /api/bot/restart` | Reinicia el proceso; Docker o systemd lo vuelven a levantar |
+| `GET /api/journal` | Diario: operaciones cerradas y abiertas, estadísticas, curva de equity (foto cada 5 min) |
+| `GET /api/signals` · `/api/signals/performance` | Historial de señales y rendimiento por estrategia |
+| `GET/PUT/DELETE /api/strategy/config` | Parámetros de tendencia y rebote (se aplican sin reiniciar) |
+| `GET/PUT/DELETE /api/trend/symbols` | Monedas de la estrategia |
+| `GET/POST /api/config` | Riesgo, protección, Telegram y market making |
+| `GET /api/system` · `PUT /api/system/capital` | Estado del sistema y capital inicial |
+| `/api/telegram/*` | Usuarios, Premium, pagos, broadcast, mensaje de prueba |
+
 ## Comandos de Telegram
 
-**Usuarios:** `/start`, `/premium`, `/trial`, `/plan`, `/signals` (Premium), `/performance`, `/referral`, `/subscribe`, `/unsubscribe`, `/terms`, `/paysupport`.
+- **Usuarios:** `/start`, `/premium`, `/trial`, `/plan`, `/signals` (Premium), `/performance`, `/referral`, `/subscribe`, `/unsubscribe`, `/terms`, `/paysupport`.
+- **Administración:** `/status`, `/balance`, `/trades`, `/stats`, `/users`, `/authorize`, `/deauthorize`, `/grant <id> <días>`, `/revoke <id>`, `/refund <id> <charge_id>`, `/broadcast`, `/broadcast_free`, `/broadcast_premium`.
 
-**Administración:** `/status`, `/balance`, `/trades`, `/stats`, `/users`, `/authorize`, `/deauthorize`, `/grant <id> <días>`, `/revoke <id>`, `/refund <id> <charge_id>`, `/broadcast`, `/broadcast_free`, `/broadcast_premium`.
+## Tests y backtests
+
+```bash
+# Tests (Rust >= 1.91)
+cargo test --locked
+
+# ...o con Docker en Windows (Git Bash)
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/app" -v arbibot-target:/target \
+  -v arbibot-cargo:/usr/local/cargo/registry -e CARGO_TARGET_DIR=/target -w /app rust:1 cargo test --locked
+
+# Backtests con datos públicos de Hyperliquid (Python 3, sin dependencias)
+cd tools/backtest
+python fetch_research.py   # descarga velas 1h + funding (15 monedas con más volumen)
+python trend.py            # variantes de tendencia, validación en dos mitades
+python portfolio.py        # cartera completa vs buy & hold
+python dips.py             # operar caídas: corto, retroceso, sobreventa (rebote)
+python trend_filters.py    # filtros de BTC y de funding sobre la tendencia
+python rotation.py         # rotación por momentum
+python funding_stats.py    # funding anualizado por moneda
+```
 
 ## Estructura
 
 ```
 src/
-  main.rs              arranque, BD, API, Telegram
+  main.rs              arranque, BD, API, Telegram, foto de equity cada 5 min
   bot.rs               orquestador (elige estrategia)
-  trend.rs             estrategia de tendencia (+ modo papel)
-  market.rs strategy.rs  market making (Avellaneda-Stoikov)
+  trend.rs             tendencia + rebote (+ modo papel, pausa, config en vivo)
+  signals.rs           señales, historial, diario de operaciones y rendimiento
   risk.rs              límites de riesgo sincronizados con la equity real
-  signals.rs           señales, historial y rendimiento
   telegram_bot.rs      bot multiusuario, planes, pagos con Stars
   notifier.rs          avisos al admin y bus de señales
+  market.rs strategy.rs  market making (Avellaneda-Stoikov)
   hyperliquid/         cliente (órdenes, stops, posiciones)
   api/                 REST + WebSocket (warp) con token
   db/                  configuración en MariaDB
 web_dashboard/         React + Vite (se sirve en /dashboard)
 tools/backtest/        investigación y validación de estrategias
 deploy/                systemd, actualización y respaldo
+docs/                  guía del dashboard y de las estrategias
 ```
 
 ## Requisitos
@@ -162,3 +162,4 @@ deploy/                systemd, actualización y respaldo
 - Rust **≥ 1.91** (lo exige alloy vía hypersdk), o Docker.
 - Node.js ≥ 20 para el dashboard.
 - MariaDB/MySQL; las tablas se crean solas al arrancar.
+- En Windows con Docker Desktop: al menos 8 GB asignados a Docker (`.wslconfig`) para compilar sin bloqueos.

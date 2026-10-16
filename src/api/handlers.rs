@@ -453,6 +453,7 @@ fn strategy_json(t: &crate::trend::TrendConfig, r: &crate::trend::ReboundConfig)
         "trend_breakout_hours": t.breakout_hours,
         "trend_exit_hours": t.exit_hours,
         "trend_stop_atr": f(t.stop_atr),
+        "trend_funding_filter": t.funding_filter,
         "rebound_enabled": r.enabled,
         "rebound_live": r.live,
         "rebound_entry_rsi": f(r.entry_rsi),
@@ -918,8 +919,8 @@ pub async fn get_journal(state: ApiState) -> Result<impl Reply, Rejection> {
             }
         }
     }
-    // Fotos de equity cada 5 min (últimos 7 días) para el gráfico
-    v["equity_series"] = serde_json::to_value(state.equity_series.lock().await.last_hours(24 * 7))
+    // Fotos de equity (5 min los últimos 7 días, luego 1/h) de los últimos 30 días
+    v["equity_series"] = serde_json::to_value(state.equity_series.lock().await.last_hours(24 * 30))
         .unwrap_or_default();
     v["initial_capital"] = serde_json::json!(initial);
     v["equity_now"] = serde_json::json!(equity_now);

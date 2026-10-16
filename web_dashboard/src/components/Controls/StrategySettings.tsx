@@ -23,6 +23,7 @@ const TREND: Field[] = [
   ["trend_breakout_hours", "Canal de entrada (horas)", "num", 24, 1000, 1, "Compra al romper el máximo de estas horas (168 = 7 días)"],
   ["trend_exit_hours", "Canal de salida (horas)", "num", 6, 500, 1, "Vende si cierra bajo el mínimo de estas horas"],
   ["trend_stop_atr", "Stop (ATR)", "num", 1, 6, 0.5, "Distancia del stop en múltiplos de la volatilidad"],
+  ["trend_funding_filter", "Filtro de funding", "bool", 0, 1, 1, "No compra si el funding de 24 h supera 2x el normal (mercado sobrecomprado). Mejoró ambas mitades del backtest"],
 ];
 
 const REBOUND: Field[] = [

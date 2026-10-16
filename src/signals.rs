@@ -565,8 +565,9 @@ impl SignalHistory {
 // SERIE DE EQUITY (una foto cada 5 minutos)
 // =============================================
 
-/// Fotos máximas guardadas: 30 días a 5 minutos
-const MAX_EQUITY_POINTS: usize = 30 * 24 * 12;
+/// Fotos cada 5 min durante 7 días; más atrás, una por hora hasta 1 año
+const EQUITY_FULL_RES_DAYS: i64 = 7;
+const EQUITY_MAX_DAYS: i64 = 365;
 
 pub struct EquitySeries {
     path: PathBuf,
@@ -584,15 +585,35 @@ impl EquitySeries {
 
     pub fn push(&mut self, equity: f64) {
         self.points.push(EquityPoint { t: Utc::now(), equity });
-        if self.points.len() > MAX_EQUITY_POINTS {
-            let extra = self.points.len() - MAX_EQUITY_POINTS;
-            self.points.drain(0..extra);
-        }
+        self.compact(Utc::now());
         if let Ok(s) = serde_json::to_string(&self.points) {
             if let Err(e) = std::fs::write(&self.path, s) {
                 error!("❌ No se pudo guardar la serie de equity: {}", e);
             }
         }
+    }
+
+    /// Conserva todo lo reciente y una foto por hora (la última) de lo antiguo
+    fn compact(&mut self, now: DateTime<Utc>) {
+        let full_since = now - chrono::Duration::days(EQUITY_FULL_RES_DAYS);
+        let keep_since = now - chrono::Duration::days(EQUITY_MAX_DAYS);
+        let mut out: Vec<EquityPoint> = Vec::with_capacity(self.points.len());
+        for p in self.points.drain(..) {
+            if p.t < keep_since {
+                continue;
+            }
+            if p.t < full_since {
+                let hour = p.t.timestamp() / 3600;
+                if let Some(last) = out.last_mut() {
+                    if last.t < full_since && last.t.timestamp() / 3600 == hour {
+                        *last = p; // queda la última foto de cada hora
+                        continue;
+                    }
+                }
+            }
+            out.push(p);
+        }
+        self.points = out;
     }
 
     /// Últimos `hours` de fotos
@@ -688,6 +709,25 @@ mod tests {
             paper: true,
             strategy: String::new(),
         }
+    }
+
+    #[test]
+    fn equity_series_keeps_recent_and_compacts_old_hourly() {
+        let path = std::env::temp_dir().join(format!("eq_test_{}.json", std::process::id()));
+        let mut s = EquitySeries { path: path.clone(), points: Vec::new() };
+        let now = Utc::now();
+        // 3 días de fotos cada 5 min hace 10 días (antiguas) + 1 hora reciente
+        for i in 0..(3 * 24 * 12) {
+            s.points.push(EquityPoint { t: now - chrono::Duration::days(10) + chrono::Duration::minutes(5 * i), equity: i as f64 });
+        }
+        for i in 0..12 {
+            s.points.push(EquityPoint { t: now - chrono::Duration::minutes(60 - 5 * i), equity: 1.0 });
+        }
+        s.compact(now);
+        let old = s.points.iter().filter(|p| p.t < now - chrono::Duration::days(7)).count();
+        assert!((72..=73).contains(&old), "antiguas: {}", old); // ~1 por hora
+        assert_eq!(s.points.iter().filter(|p| p.t > now - chrono::Duration::hours(2)).count(), 12);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
