@@ -170,6 +170,11 @@ impl TradingBot {
         self.trend.as_ref().map(|t| t.symbols_handle())
     }
 
+    /// Cliente de mercado (precios) cuando la estrategia de tendencia está activa
+    pub fn market_client(&self) -> Option<Arc<HyperliquidClient>> {
+        self.trend.as_ref().map(|t| t.client())
+    }
+
     pub fn trend_available_markets(&self) -> Vec<String> {
         self.trend.as_ref().map(|t| t.available_markets()).unwrap_or_default()
     }

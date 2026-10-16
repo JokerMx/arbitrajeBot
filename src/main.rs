@@ -264,6 +264,17 @@ async fn main() -> anyhow::Result<()> {
     // =============================================
     // TELEGRAM BOT
     // =============================================
+    // Historial de señales: se graba siempre, haya o no Telegram (fuente del dashboard)
+    let data_dir = signals::data_dir();
+    let _ = std::fs::create_dir_all(&data_dir);
+    let signal_history = Arc::new(Mutex::new(signals::SignalHistory::load(
+        &data_dir.join("signals_history.json"),
+    )));
+    signals::spawn_recorder(notifier.clone(), signal_history.clone());
+    let equity_series = Arc::new(Mutex::new(signals::EquitySeries::load(
+        &data_dir.join("equity_history.json"),
+    )));
+
     let telegram_bot_option: Option<Arc<TelegramBot>> = if !telegram_token.is_empty() {
         info!("🤖 Iniciando Telegram Bot...");
         let tg_bot = Arc::new(TelegramBot::new(
@@ -271,6 +282,7 @@ async fn main() -> anyhow::Result<()> {
             risk_manager.clone(),
             bot.clone(),
             notifier.clone(),
+            signal_history.clone(),
         ));
         if !telegram_chat_id.is_empty() {
             tg_bot.add_admin(&telegram_chat_id).await;
@@ -323,7 +335,34 @@ async fn main() -> anyhow::Result<()> {
         leverage_configs,
         protection_arc,
         telegram_arc,
+        signal_history.clone(),
+        equity_series.clone(),
     );
+
+    // Foto de equity cada 5 minutos para el gráfico del dashboard
+    {
+        let (history, series, rm, bot) =
+            (signal_history.clone(), equity_series.clone(), risk_manager.clone(), bot.clone());
+        tokio::spawn(async move {
+            let mut every = tokio::time::interval(std::time::Duration::from_secs(300));
+            loop {
+                every.tick().await;
+                let initial = rm.lock().await.initial_capital().to_f64().unwrap_or(0.0);
+                let journal = history.lock().await.journal(initial);
+                let mut mids = std::collections::HashMap::new();
+                if !journal.open.is_empty() {
+                    let client = bot.lock().await.market_client();
+                    if let Some(client) = client {
+                        if let Ok(m) = client.get_all_mids().await {
+                            mids = m.into_iter().filter_map(|(k, v)| v.to_f64().map(|f| (k, f))).collect();
+                        }
+                    }
+                }
+                let equity = journal.equity_with_prices(initial, &mids);
+                series.lock().await.push(equity);
+            }
+        });
+    }
 
     // API_BIND=0.0.0.0 solo dentro de un contenedor; en un servidor deja 127.0.0.1
     let port: u16 = env::var("API_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(3001);

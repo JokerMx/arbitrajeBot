@@ -35,6 +35,8 @@ pub struct ApiState {
     pub leverage_configs: Arc<Mutex<std::collections::HashMap<String, i32>>>,
     pub protection_config: Arc<Mutex<crate::db::models::ProtectionConfigDB>>,
     pub telegram_config: Arc<Mutex<crate::db::models::TelegramConfigDB>>,
+    pub signal_history: Arc<Mutex<crate::signals::SignalHistory>>,
+    pub equity_series: Arc<Mutex<crate::signals::EquitySeries>>,
 }
 
 // =============================================
@@ -619,6 +621,50 @@ pub async fn get_signal_history(state: ApiState) -> Result<impl Reply, Rejection
         Some(bot) => Ok(json(&bot.get_signals(200).await)),
         None => Ok(json(&Vec::<crate::signals::SignalRecord>::new())),
     }
+}
+
+// =============================================
+// DIARIO DE OPERACIONES (página principal)
+// =============================================
+
+pub async fn get_journal(state: ApiState) -> Result<impl Reply, Rejection> {
+    let (initial, equity_now) = {
+        let rm = state.risk_manager.lock().await;
+        (
+            rm.initial_capital().to_f64().unwrap_or(0.0),
+            rm.current_balance().to_f64().unwrap_or(0.0),
+        )
+    };
+    let journal = state.signal_history.lock().await.journal(initial);
+    let mut v = serde_json::to_value(&journal).unwrap_or_default();
+
+    // Precio actual y P&L no realizado de las posiciones abiertas
+    let client = state.bot.lock().await.market_client();
+    if let (Some(client), Some(open)) = (client, v["open"].as_array_mut()) {
+        if !open.is_empty() {
+            if let Ok(mids) = client.get_all_mids().await {
+                for o in open.iter_mut() {
+                    let symbol = o["symbol"].as_str().unwrap_or_default().to_string();
+                    let entry = o["entry"].as_f64().unwrap_or(0.0);
+                    if let Some(px) = mids.get(&symbol).and_then(|d| d.to_f64()) {
+                        let pct = if entry > 0.0 { (px / entry - 1.0) * 100.0 } else { 0.0 };
+                        o["current"] = serde_json::json!(px);
+                        o["unrealized_pct"] = serde_json::json!(pct);
+                        if let Some(n) = o["notional"].as_f64() {
+                            o["unrealized_usd"] = serde_json::json!(n * pct / 100.0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Fotos de equity cada 5 min (últimos 7 días) para el gráfico
+    v["equity_series"] = serde_json::to_value(state.equity_series.lock().await.last_hours(24 * 7))
+        .unwrap_or_default();
+    v["initial_capital"] = serde_json::json!(initial);
+    v["equity_now"] = serde_json::json!(equity_now);
+    v["updated_at"] = serde_json::json!(chrono::Utc::now());
+    Ok(json(&v))
 }
 
 // =============================================

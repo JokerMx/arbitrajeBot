@@ -337,6 +337,10 @@ impl TrendTrader {
         self.symbols.clone()
     }
 
+    pub fn client(&self) -> Arc<HyperliquidClient> {
+        self.client.clone()
+    }
+
     pub fn available_markets(&self) -> Vec<String> {
         self.client.market_names()
     }
@@ -692,6 +696,7 @@ impl TrendTrader {
                 stop: entry - dist,
                 paper: true,
                 strategy: STRATEGY_TREND.into(),
+                notional: Some(notional),
             });
             return Some(notional);
         }
@@ -742,6 +747,7 @@ impl TrendTrader {
                     stop,
                     paper: false,
                     strategy: STRATEGY_TREND.into(),
+                    notional: Some(filled * entry),
                 });
             }
             Err(e) => {
@@ -1052,6 +1058,7 @@ impl TrendTrader {
             stop: pos.stop,
             paper: !live,
             strategy: STRATEGY_REBOUND.into(),
+            notional: Some(size * entry),
         });
         self.rebound.insert(symbol.to_string(), pos);
         self.save_rebound();

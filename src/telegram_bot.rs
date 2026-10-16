@@ -208,6 +208,7 @@ impl TelegramBot {
         risk_manager: Arc<Mutex<RiskManager>>,
         bot: Arc<Mutex<TradingBot>>,
         notifier: Arc<TelegramNotifier>,
+        history: Arc<Mutex<SignalHistory>>,
     ) -> Self {
         let data_dir = std::env::var("DATA_DIR")
             .map(PathBuf::from)
@@ -223,7 +224,6 @@ impl TelegramBot {
             }
         }
         let payments_file = data_dir.join("payments.json");
-        let history_file = data_dir.join("signals_history.json");
         info!("📁 Datos de Telegram en {:?}", data_dir);
 
         let users = Self::load_users_sync(&subscribers_file);
@@ -249,7 +249,7 @@ impl TelegramBot {
             subscribers_file,
             payments: Arc::new(Mutex::new(payments)),
             payments_file,
-            history: Arc::new(Mutex::new(SignalHistory::load(&history_file))),
+            history,
             bot_username: Arc::new(Mutex::new(String::new())),
             cfg,
         }
@@ -748,7 +748,7 @@ impl TelegramBot {
     // =============================================
 
     async fn handle_signal(&self, event: SignalEvent) {
-        let record = self.history.lock().await.push(event.clone());
+        // El historial lo graba signals::spawn_recorder (funciona aunque no haya Telegram)
         let users = self.users.lock().await.clone();
         let premium: Vec<String> = users
             .iter()
@@ -762,7 +762,7 @@ impl TelegramBot {
             .collect();
 
         let sent = self.send_bulk(&premium, &event.format_premium()).await;
-        info!("📡 Señal #{} {} enviada a {} premium", record.id, event.symbol(), sent);
+        info!("📡 Señal {} {} enviada a {} premium", event.strategy(), event.symbol(), sent);
 
         if let Some(teaser) = event.format_free_teaser(self.cfg.free_signal_delay_hours) {
             self.send_bulk(&free, &teaser).await;

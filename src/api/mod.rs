@@ -31,6 +31,8 @@ pub fn api_routes(
     leverage_configs: Arc<Mutex<std::collections::HashMap<String, i32>>>,
     protection_arc: Arc<Mutex<ProtectionConfigDB>>,
     telegram_config: Arc<Mutex<crate::db::models::TelegramConfigDB>>,
+    signal_history: Arc<Mutex<crate::signals::SignalHistory>>,
+    equity_series: Arc<Mutex<crate::signals::EquitySeries>>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     
     let exchange_type_arc = Arc::new(Mutex::new(exchange_type));
@@ -49,6 +51,8 @@ pub fn api_routes(
         leverage_configs,
         protection_config: protection_arc,
         telegram_config,
+        signal_history,
+        equity_series,
     };
     
     let state_filter = warp::any().map(move || state.clone());
@@ -177,6 +181,11 @@ pub fn api_routes(
         .and(state_filter.clone())
         .and_then(handlers::get_signal_history);
 
+    let journal = warp::path!("api" / "journal")
+        .and(warp::get())
+        .and(state_filter.clone())
+        .and_then(handlers::get_journal);
+
     let trend_symbols_get = warp::path!("api" / "trend" / "symbols")
         .and(warp::get())
         .and(state_filter.clone())
@@ -285,7 +294,8 @@ pub fn api_routes(
         .or(signal_history)
         .or(trend_symbols_get)
         .or(trend_symbols_set)
-        .or(trend_symbols_reset));
+        .or(trend_symbols_reset)
+        .or(journal));
 
     let routes = api
         .or(ws)
