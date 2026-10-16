@@ -65,6 +65,8 @@ impl TradingBot {
         trend_symbols_override: Option<Vec<String>>,
         strategy_overrides: Option<StrategyOverrides>,
         trading_paused: bool,
+        paper_realized_pnl: Decimal,
+        store: Arc<crate::db::Store>,
     ) -> anyhow::Result<Self> {
         info!("Inicializando TradingBot en red: {}", config.network);
         
@@ -130,6 +132,8 @@ impl TradingBot {
                 initial_capital,
                 rebound_cfg,
                 trading_paused,
+                paper_realized_pnl,
+                Some(store.clone()),
             ));
         }
 

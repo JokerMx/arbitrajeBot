@@ -32,6 +32,9 @@ const EVAL_DELAY_MS: u64 = 20_000;
 const PAPER_COST: Decimal = dec!(0.00095);
 /// Mínimo de Hyperliquid por orden
 const MIN_ORDER_USD: Decimal = dec!(10);
+/// Claves de las posiciones abiertas en la BD (tabla open_positions)
+const POS_REBOUND: &str = "rebote";
+const POS_TREND_PAPER: &str = "tendencia_papel";
 
 /// Monedas definidas en TREND_SYMBOLS (valor por defecto de la selección)
 pub fn env_symbols() -> Vec<String> {
@@ -326,13 +329,13 @@ impl Signal {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PaperPosition {
     size: Decimal,
     entry: Decimal,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct CoinState {
     stop: Option<Decimal>,
     stop_oid: Option<u64>,
@@ -359,7 +362,8 @@ pub struct TrendTrader {
     halted: bool,
     rebound_cfg: ReboundConfig,
     rebound: HashMap<String, ReboundPosition>,
-    rebound_file: std::path::PathBuf,
+    /// Persistencia en MariaDB de posiciones abiertas (sobreviven a reinicios)
+    store: Option<Arc<crate::db::Store>>,
     /// Configuración editable desde el dashboard (se aplica en cada evaluación)
     shared_cfg: Arc<RwLock<(TrendConfig, ReboundConfig)>>,
     /// Pausa de nuevas entradas (las posiciones abiertas se siguen gestionando)
@@ -378,19 +382,21 @@ impl TrendTrader {
         initial_capital: Decimal,
         rebound_cfg: ReboundConfig,
         paused: bool,
+        paper_realized_pnl: Decimal,
+        store: Option<Arc<crate::db::Store>>,
     ) -> Self {
-        let states = symbols.iter().map(|s| (s.clone(), CoinState::default())).collect();
+        let states: HashMap<String, CoinState> =
+            symbols.iter().map(|s| (s.clone(), CoinState::default())).collect();
         let cfg_for_share = cfg.clone();
-        let data_dir = std::env::var("DATA_DIR")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
-        let rebound_file = data_dir.join("rebound_positions.json");
-        let rebound: HashMap<String, ReboundPosition> = std::fs::read_to_string(&rebound_file)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
-        if !rebound.is_empty() {
-            info!("♻️ Rebote: {} posiciones recuperadas de {:?}", rebound.len(), rebound_file);
+        // Las posiciones abiertas se recuperan de la BD en start()
+        let rebound: HashMap<String, ReboundPosition> = HashMap::new();
+        // En papel, la equity parte del capital inicial + lo ganado/perdido antes del reinicio
+        let paper_equity = initial_capital + paper_realized_pnl;
+        if !live && !paper_realized_pnl.is_zero() {
+            info!(
+                "♻️ Equity en papel restaurada: ${:.2} (inicial ${:.2} + realizado ${:.2})",
+                paper_equity, initial_capital, paper_realized_pnl
+            );
         }
         Self {
             cfg,
@@ -407,13 +413,71 @@ impl TrendTrader {
             live,
             states,
             last_eval_hour: 0,
-            paper_equity: initial_capital,
+            paper_equity,
             halted: false,
             shared_cfg: Arc::new(RwLock::new((cfg_for_share, rebound_cfg.clone()))),
             paused: Arc::new(AtomicBool::new(paused)),
             rebound_cfg,
             rebound,
-            rebound_file,
+            store,
+        }
+    }
+
+    /// Recupera de la BD las posiciones abiertas guardadas antes de un reinicio
+    async fn restore_positions(&mut self) {
+        let Some(store) = self.store.clone() else { return };
+        match store.load_positions(POS_REBOUND).await {
+            Ok(rows) => {
+                for (symbol, data) in rows {
+                    match serde_json::from_str::<ReboundPosition>(&data) {
+                        Ok(p) => {
+                            self.rebound.insert(symbol, p);
+                        }
+                        Err(e) => warn!("Posición de rebote ilegible ({}): {}", symbol, e),
+                    }
+                }
+                if !self.rebound.is_empty() {
+                    info!("♻️ Rebote: {} posiciones recuperadas de la BD", self.rebound.len());
+                }
+            }
+            Err(e) => error!("❌ No se pudieron leer posiciones de rebote: {}", e),
+        }
+        if self.live {
+            return; // en real, las posiciones de tendencia se leen del exchange
+        }
+        match store.load_positions(POS_TREND_PAPER).await {
+            Ok(rows) => {
+                let n = rows.len();
+                for (symbol, data) in rows {
+                    match serde_json::from_str::<CoinState>(&data) {
+                        Ok(st) => {
+                            self.states.insert(symbol, st);
+                        }
+                        Err(e) => warn!("Posición en papel ilegible ({}): {}", symbol, e),
+                    }
+                }
+                if n > 0 {
+                    info!("♻️ Tendencia (papel): {} posiciones recuperadas de la BD", n);
+                }
+            }
+            Err(e) => error!("❌ No se pudieron leer posiciones en papel: {}", e),
+        }
+    }
+
+    /// Guarda las posiciones de tendencia en papel (para sobrevivir a reinicios)
+    async fn save_paper_state(&self) {
+        if self.live {
+            return;
+        }
+        let Some(store) = &self.store else { return };
+        let rows: Vec<(String, String)> = self
+            .states
+            .iter()
+            .filter(|(_, st)| st.paper.is_some())
+            .filter_map(|(s, st)| Some((s.clone(), serde_json::to_string(st).ok()?)))
+            .collect();
+        if let Err(e) = store.replace_positions(POS_TREND_PAPER, &rows).await {
+            error!("❌ No se pudieron guardar las posiciones en papel: {}", e);
         }
     }
 
@@ -442,6 +506,7 @@ impl TrendTrader {
     }
 
     pub async fn start(&mut self) -> anyhow::Result<()> {
+        self.restore_positions().await;
         let symbols = self.symbols.read().await.clone();
         info!(
             "📈 Estrategia TENDENCIA ({}) en {:?}: ruptura {}h, salida {}h, stop {} ATR, riesgo {}%/op (hasta {}% al subir a $10), máx {} posiciones, máx {}x",
@@ -545,7 +610,8 @@ impl TrendTrader {
         // 2. Límites globales del risk manager
         let flatten = {
             let mut rm = self.risk_manager.lock().await;
-            rm.sync_balance(equity);
+            // En papel no se reemplaza el capital inicial por la equity actual
+            rm.sync_balance_with(equity, !self.live);
             rm.should_flatten()
         };
         if flatten {
@@ -657,6 +723,7 @@ impl TrendTrader {
                 .await;
         }
 
+        self.save_paper_state().await;
         info!(
             "📊 Tendencia: equity ${:.2}, {} posiciones (+{} rebote), nocional ${:.2} ({:.2}x)",
             equity,
@@ -981,6 +1048,7 @@ impl TrendTrader {
                     if let Some(st) = self.states.get_mut(&symbol) {
                         *st = CoinState::default();
                     }
+                    self.save_paper_state().await;
                 }
             }
         }
@@ -1023,14 +1091,15 @@ impl TrendTrader {
         self.live && self.rebound_cfg.live
     }
 
-    fn save_rebound(&self) {
-        match serde_json::to_string_pretty(&self.rebound) {
-            Ok(s) => {
-                if let Err(e) = std::fs::write(&self.rebound_file, s) {
-                    error!("❌ No se pudo guardar {:?}: {}", self.rebound_file, e);
-                }
-            }
-            Err(e) => error!("❌ Error serializando posiciones de rebote: {}", e),
+    async fn save_rebound(&self) {
+        let Some(store) = &self.store else { return };
+        let rows: Vec<(String, String)> = self
+            .rebound
+            .iter()
+            .filter_map(|(s, p)| Some((s.clone(), serde_json::to_string(p).ok()?)))
+            .collect();
+        if let Err(e) = store.replace_positions(POS_REBOUND, &rows).await {
+            error!("❌ No se pudieron guardar las posiciones de rebote: {}", e);
         }
     }
 
@@ -1053,7 +1122,7 @@ impl TrendTrader {
                 info!("ℹ️ {}: rebote cerrado por stop en el exchange", symbol);
                 self.publish_rebound_exit(&symbol, &pos, pos.stop, "stop");
                 self.rebound.remove(&symbol);
-                self.save_rebound();
+                self.save_rebound().await;
                 continue;
             }
             let Some(sig) = signals.get(&symbol) else { continue };
@@ -1192,7 +1261,7 @@ impl TrendTrader {
             notional: Some(size * entry),
         });
         self.rebound.insert(symbol.to_string(), pos);
-        self.save_rebound();
+        self.save_rebound().await;
         Some(size * entry)
     }
 
@@ -1226,7 +1295,7 @@ impl TrendTrader {
         let _ = self.notifier.send_message(&msg).await;
         self.publish_rebound_exit(symbol, pos, exit_px, reason);
         self.rebound.remove(symbol);
-        self.save_rebound();
+        self.save_rebound().await;
     }
 
     fn publish_rebound_exit(&self, symbol: &str, pos: &ReboundPosition, exit: Decimal, reason: &str) {

@@ -465,8 +465,19 @@ impl RiskManager {
     /// La primera sincronización fija el capital inicial a la equity real, para que
     /// stop-loss y drawdown se midan contra el dinero que realmente hay en la cuenta.
     pub fn sync_balance(&mut self, equity: Decimal) {
+        self.sync_balance_with(equity, false)
+    }
+
+    /// `keep_initial = true` (modo papel): el capital inicial configurado no se reemplaza
+    /// por la equity del primer sync, que ya incluye ganancias anteriores.
+    pub fn sync_balance_with(&mut self, equity: Decimal, keep_initial: bool) {
         if equity <= Decimal::ZERO {
             return;
+        }
+        if !self.synced_with_exchange && keep_initial {
+            self.peak_balance = self.initial_capital.max(equity);
+            self.day_start_balance = equity;
+            self.synced_with_exchange = true;
         }
         if !self.synced_with_exchange {
             if self.initial_capital != equity {

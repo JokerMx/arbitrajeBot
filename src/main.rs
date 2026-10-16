@@ -239,6 +239,39 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Estado operativo en MariaDB: historial de señales, fotos de equity, usuarios y
+    // pagos de Telegram y posiciones abiertas. Sobrevive a detenciones y reinicios.
+    let store = Arc::new(db::Store::new(db.pool.clone(), &db.config.table_prefix));
+    store.init_tables().await?;
+    // Migración única desde los archivos JSON de versiones anteriores
+    let data_dir = signals::data_dir();
+    if let Err(e) = store.migrate_from_files(&data_dir).await {
+        error!("❌ Error migrando archivos JSON a la BD: {}", e);
+    }
+    let signal_history = Arc::new(Mutex::new(signals::SignalHistory::from_records(
+        store.load_signals().await.unwrap_or_else(|e| {
+            error!("❌ No se pudo leer el historial de señales: {}", e);
+            Vec::new()
+        }),
+    )));
+    signals::spawn_recorder(notifier.clone(), signal_history.clone(), store.clone());
+    let equity_series = Arc::new(Mutex::new(signals::EquitySeries::from_points(
+        store.load_equity().await.unwrap_or_default(),
+    )));
+    info!(
+        "🗄️ Estado cargado de la BD: {} señales, {} fotos de equity",
+        signal_history.lock().await.records.len(),
+        equity_series.lock().await.points.len()
+    );
+
+    // Ganancia ya realizada en papel (para no perderla al reiniciar)
+    let paper_realized_pnl = {
+        let initial = initial_capital.to_f64().unwrap_or(0.0);
+        let journal = signal_history.lock().await.journal(initial);
+        let realized: f64 = journal.closed.iter().filter(|t| t.paper).filter_map(|t| t.pnl_usd).sum();
+        Decimal::from_f64(realized).unwrap_or_default()
+    };
+
     // =============================================
     // TRADING BOT
     // =============================================
@@ -271,6 +304,8 @@ async fn main() -> anyhow::Result<()> {
             .ok()
             .flatten()
             .map_or(false, |v| v == "true"),
+        paper_realized_pnl,
+        store.clone(),
     )
     .await?;
     let bot = Arc::new(Mutex::new(bot));
@@ -278,16 +313,6 @@ async fn main() -> anyhow::Result<()> {
     // =============================================
     // TELEGRAM BOT
     // =============================================
-    // Historial de señales: se graba siempre, haya o no Telegram (fuente del dashboard)
-    let data_dir = signals::data_dir();
-    let _ = std::fs::create_dir_all(&data_dir);
-    let signal_history = Arc::new(Mutex::new(signals::SignalHistory::load(
-        &data_dir.join("signals_history.json"),
-    )));
-    signals::spawn_recorder(notifier.clone(), signal_history.clone());
-    let equity_series = Arc::new(Mutex::new(signals::EquitySeries::load(
-        &data_dir.join("equity_history.json"),
-    )));
 
     let telegram_bot_option: Option<Arc<TelegramBot>> = if !telegram_token.is_empty() {
         info!("🤖 Iniciando Telegram Bot...");
@@ -297,6 +322,9 @@ async fn main() -> anyhow::Result<()> {
             bot.clone(),
             notifier.clone(),
             signal_history.clone(),
+            store.clone(),
+            store.load_tg_users_json().await.unwrap_or_default(),
+            store.load_tg_payments_json().await.unwrap_or_default(),
         ));
         if !telegram_chat_id.is_empty() {
             tg_bot.add_admin(&telegram_chat_id).await;
@@ -355,8 +383,13 @@ async fn main() -> anyhow::Result<()> {
 
     // Foto de equity cada 5 minutos para el gráfico del dashboard
     {
-        let (history, series, rm, bot) =
-            (signal_history.clone(), equity_series.clone(), risk_manager.clone(), bot.clone());
+        let (history, series, rm, bot, store) = (
+            signal_history.clone(),
+            equity_series.clone(),
+            risk_manager.clone(),
+            bot.clone(),
+            store.clone(),
+        );
         tokio::spawn(async move {
             let mut every = tokio::time::interval(std::time::Duration::from_secs(300));
             loop {
@@ -373,7 +406,13 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
                 let equity = journal.equity_with_prices(initial, &mids);
-                series.lock().await.push(equity);
+                let (point, removed) = series.lock().await.push(equity);
+                if let Err(e) = store.insert_equity(&point).await {
+                    error!("❌ No se pudo guardar la foto de equity: {}", e);
+                }
+                if !removed.is_empty() {
+                    let _ = store.delete_equity(&removed).await;
+                }
             }
         });
     }

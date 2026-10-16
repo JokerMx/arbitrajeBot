@@ -25,6 +25,7 @@ pub fn data_dir() -> PathBuf {
 pub fn spawn_recorder(
     notifier: Arc<crate::notifier::TelegramNotifier>,
     history: Arc<Mutex<SignalHistory>>,
+    store: Arc<crate::db::Store>,
 ) {
     let mut rx = notifier.subscribe_signals();
     tokio::spawn(async move {
@@ -32,6 +33,9 @@ pub fn spawn_recorder(
             match rx.recv().await {
                 Ok(ev) => {
                     let rec = history.lock().await.push(ev);
+                    if let Err(e) = store.insert_signal(&rec).await {
+                        error!("❌ No se pudo guardar la señal #{} en la BD: {}", rec.id, e);
+                    }
                     info!("📝 Señal #{} registrada ({} {})", rec.id, rec.event.strategy(), rec.event.symbol());
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
@@ -100,6 +104,22 @@ impl SignalEvent {
                 STRATEGY_REBOUND
             }
             _ => STRATEGY_TREND,
+        }
+    }
+
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            SignalEvent::Entry { .. } => "Entry",
+            SignalEvent::StopMoved { .. } => "StopMoved",
+            SignalEvent::Exit { .. } => "Exit",
+        }
+    }
+
+    pub fn is_paper(&self) -> bool {
+        match self {
+            SignalEvent::Entry { paper, .. }
+            | SignalEvent::StopMoved { paper, .. }
+            | SignalEvent::Exit { paper, .. } => *paper,
         }
     }
 
@@ -242,43 +262,28 @@ pub struct Performance {
     pub since: Option<DateTime<Utc>>,
 }
 
+/// Historial en memoria; la persistencia está en la BD (db::Store)
+#[derive(Default)]
 pub struct SignalHistory {
-    path: PathBuf,
     pub records: Vec<SignalRecord>,
 }
 
 impl SignalHistory {
-    pub fn load(path: &Path) -> Self {
-        let records = std::fs::read_to_string(path)
-            .ok()
-            .and_then(|s| match serde_json::from_str::<Vec<SignalRecord>>(&s) {
-                Ok(r) => Some(r),
-                Err(e) => {
-                    warn!("⚠️ No se pudo leer {:?}: {}", path, e);
-                    None
-                }
-            })
-            .unwrap_or_default();
-        Self { path: path.to_path_buf(), records }
+    pub fn new() -> Self {
+        Self::default()
     }
 
+    pub fn from_records(mut records: Vec<SignalRecord>) -> Self {
+        records.sort_by_key(|r| r.id);
+        Self { records }
+    }
+
+    /// Agrega una señal en memoria (quien llama la guarda en la BD)
     pub fn push(&mut self, event: SignalEvent) -> SignalRecord {
         let id = self.records.last().map_or(1, |r| r.id + 1);
         let rec = SignalRecord { id, at: Utc::now(), event, free_released: false };
         self.records.push(rec.clone());
-        self.save();
         rec
-    }
-
-    pub fn save(&self) {
-        match serde_json::to_string_pretty(&self.records) {
-            Ok(s) => {
-                if let Err(e) = std::fs::write(&self.path, s) {
-                    error!("❌ Error guardando historial de señales: {}", e);
-                }
-            }
-            Err(e) => error!("❌ Error serializando señales: {}", e),
-        }
     }
 
     pub fn performance(&self) -> Performance {
@@ -569,43 +574,43 @@ impl SignalHistory {
 const EQUITY_FULL_RES_DAYS: i64 = 7;
 const EQUITY_MAX_DAYS: i64 = 365;
 
+/// Serie en memoria; la persistencia está en la BD (db::Store)
+#[derive(Default)]
 pub struct EquitySeries {
-    path: PathBuf,
     pub points: Vec<EquityPoint>,
 }
 
 impl EquitySeries {
-    pub fn load(path: &Path) -> Self {
-        let points = std::fs::read_to_string(path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<Vec<EquityPoint>>(&s).ok())
-            .unwrap_or_default();
-        Self { path: path.to_path_buf(), points }
+    pub fn from_points(mut points: Vec<EquityPoint>) -> Self {
+        points.sort_by_key(|p| p.t);
+        Self { points }
     }
 
-    pub fn push(&mut self, equity: f64) {
-        self.points.push(EquityPoint { t: Utc::now(), equity });
-        self.compact(Utc::now());
-        if let Ok(s) = serde_json::to_string(&self.points) {
-            if let Err(e) = std::fs::write(&self.path, s) {
-                error!("❌ No se pudo guardar la serie de equity: {}", e);
-            }
-        }
+    /// Agrega una foto. Devuelve la foto nueva y las fechas de las que se descartaron
+    /// al compactar (quien llama sincroniza ambas cosas con la BD).
+    pub fn push(&mut self, equity: f64) -> (EquityPoint, Vec<DateTime<Utc>>) {
+        let p = EquityPoint { t: Utc::now(), equity };
+        self.points.push(p.clone());
+        let removed = self.compact(Utc::now());
+        (p, removed)
     }
 
     /// Conserva todo lo reciente y una foto por hora (la última) de lo antiguo
-    fn compact(&mut self, now: DateTime<Utc>) {
+    fn compact(&mut self, now: DateTime<Utc>) -> Vec<DateTime<Utc>> {
         let full_since = now - chrono::Duration::days(EQUITY_FULL_RES_DAYS);
         let keep_since = now - chrono::Duration::days(EQUITY_MAX_DAYS);
         let mut out: Vec<EquityPoint> = Vec::with_capacity(self.points.len());
+        let mut removed = Vec::new();
         for p in self.points.drain(..) {
             if p.t < keep_since {
+                removed.push(p.t);
                 continue;
             }
             if p.t < full_since {
                 let hour = p.t.timestamp() / 3600;
                 if let Some(last) = out.last_mut() {
                     if last.t < full_since && last.t.timestamp() / 3600 == hour {
+                        removed.push(last.t);
                         *last = p; // queda la última foto de cada hora
                         continue;
                     }
@@ -614,6 +619,7 @@ impl EquitySeries {
             out.push(p);
         }
         self.points = out;
+        removed
     }
 
     /// Últimos `hours` de fotos
@@ -713,8 +719,7 @@ mod tests {
 
     #[test]
     fn equity_series_keeps_recent_and_compacts_old_hourly() {
-        let path = std::env::temp_dir().join(format!("eq_test_{}.json", std::process::id()));
-        let mut s = EquitySeries { path: path.clone(), points: Vec::new() };
+        let mut s = EquitySeries::default();
         let now = Utc::now();
         // 3 días de fotos cada 5 min hace 10 días (antiguas) + 1 hora reciente
         for i in 0..(3 * 24 * 12) {
@@ -723,11 +728,11 @@ mod tests {
         for i in 0..12 {
             s.points.push(EquityPoint { t: now - chrono::Duration::minutes(60 - 5 * i), equity: 1.0 });
         }
-        s.compact(now);
+        let removed = s.compact(now);
+        assert_eq!(removed.len() + s.points.len(), 3 * 24 * 12 + 12);
         let old = s.points.iter().filter(|p| p.t < now - chrono::Duration::days(7)).count();
         assert!((72..=73).contains(&old), "antiguas: {}", old); // ~1 por hora
         assert_eq!(s.points.iter().filter(|p| p.t > now - chrono::Duration::hours(2)).count(), 12);
-        let _ = std::fs::remove_file(path);
     }
 
     #[test]
@@ -739,8 +744,7 @@ mod tests {
 
     #[test]
     fn performance_counts() {
-        let dir = std::env::temp_dir().join(format!("sig_test_{}.json", std::process::id()));
-        let mut h = SignalHistory::load(&dir);
+        let mut h = SignalHistory::new();
         h.push(SignalEvent::Entry { symbol: "BTC".into(), price: dec!(100), stop: dec!(97), paper: true, strategy: String::new(), notional: Some(dec!(200)) });
         h.push(exit(dec!(100), dec!(106), dec!(97)));
         h.push(SignalEvent::Entry { symbol: "ETH".into(), price: dec!(10), stop: dec!(9), paper: true, strategy: STRATEGY_REBOUND.into(), notional: None });
@@ -778,6 +782,5 @@ mod tests {
         assert_eq!(j.open[0].symbol, "ETH");
         assert_eq!(j.open[0].strategy, STRATEGY_REBOUND);
         assert!((j.equity_curve.last().unwrap().equity - 512.0).abs() < 1e-9);
-        let _ = std::fs::remove_file(dir);
     }
 }

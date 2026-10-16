@@ -12,8 +12,6 @@ use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::fs;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{self, Duration};
@@ -194,44 +192,39 @@ pub struct TelegramBot {
     notifier: Arc<TelegramNotifier>,
     users: Arc<Mutex<Vec<TelegramUser>>>,
     admin_ids: Arc<Mutex<Vec<String>>>,
-    subscribers_file: PathBuf,
     payments: Arc<Mutex<Vec<PaymentRecord>>>,
-    payments_file: PathBuf,
     history: Arc<Mutex<SignalHistory>>,
+    /// Persistencia en MariaDB (usuarios, pagos, liberación de señales)
+    store: Arc<crate::db::Store>,
     bot_username: Arc<Mutex<String>>,
     cfg: MonetizationConfig,
 }
 
 impl TelegramBot {
+    /// `users_json` y `payments_json` vienen de la BD (db::Store)
     pub fn new(
         bot_token: &str,
         risk_manager: Arc<Mutex<RiskManager>>,
         bot: Arc<Mutex<TradingBot>>,
         notifier: Arc<TelegramNotifier>,
         history: Arc<Mutex<SignalHistory>>,
+        store: Arc<crate::db::Store>,
+        users_json: Vec<String>,
+        payments_json: Vec<String>,
     ) -> Self {
-        let data_dir = std::env::var("DATA_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
-        let _ = fs::create_dir_all(&data_dir);
-        let subscribers_file = data_dir.join("subscribers.json");
-        // Migración: si los datos estaban en el directorio actual, copiarlos a DATA_DIR
-        let legacy = std::env::current_dir().unwrap_or_default().join("subscribers.json");
-        if !subscribers_file.exists() && legacy.exists() && legacy != subscribers_file {
-            match fs::copy(&legacy, &subscribers_file) {
-                Ok(_) => info!("📦 subscribers.json migrado a {:?}", subscribers_file),
-                Err(e) => error!("❌ No se pudo migrar subscribers.json: {}", e),
-            }
-        }
-        let payments_file = data_dir.join("payments.json");
-        info!("📁 Datos de Telegram en {:?}", data_dir);
-
-        let users = Self::load_users_sync(&subscribers_file);
+        let users: Vec<TelegramUser> = users_json
+            .iter()
+            .filter_map(|j| match serde_json::from_str(j) {
+                Ok(u) => Some(u),
+                Err(e) => {
+                    error!("❌ Usuario ilegible en la BD: {}", e);
+                    None
+                }
+            })
+            .collect();
+        let payments: Vec<PaymentRecord> = payments_json.iter().filter_map(|j| serde_json::from_str(j).ok()).collect();
+        info!("👥 {} usuarios y {} pagos cargados de la BD", users.len(), payments.len());
         let admin_ids: Vec<String> = users.iter().filter(|u| u.is_admin).map(|u| u.chat_id.clone()).collect();
-        let payments: Vec<PaymentRecord> = fs::read_to_string(&payments_file)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
         let cfg = MonetizationConfig::from_env();
         info!(
             "💎 Premium: {} ⭐ / {} días | prueba {} días | referido +{} días | retraso free {} h",
@@ -246,61 +239,34 @@ impl TelegramBot {
             notifier,
             users: Arc::new(Mutex::new(users)),
             admin_ids: Arc::new(Mutex::new(admin_ids)),
-            subscribers_file,
             payments: Arc::new(Mutex::new(payments)),
-            payments_file,
             history,
+            store,
             bot_username: Arc::new(Mutex::new(String::new())),
             cfg,
         }
     }
 
-    fn load_users_sync(file_path: &PathBuf) -> Vec<TelegramUser> {
-        let content = match fs::read_to_string(file_path) {
-            Ok(c) => c,
-            Err(_) => {
-                info!("📂 {:?} no existe; se creará", file_path);
-                return Vec::new();
-            }
-        };
-        if let Ok(users) = serde_json::from_str::<Vec<TelegramUser>>(&content) {
-            info!("✅ Cargados {} usuarios", users.len());
-            return users;
-        }
-        // Formato antiguo: lista de chat_ids
-        if let Ok(chat_ids) = serde_json::from_str::<Vec<String>>(&content) {
-            let users: Vec<TelegramUser> = chat_ids
-                .iter()
-                .map(|id| {
-                    let mut u = TelegramUser::new(id, &format!("user_{}", id), "Usuario", true, false);
-                    u.subscribed = true;
-                    u
-                })
-                .collect();
-            info!("✅ Cargados {} usuarios (formato legacy)", users.len());
-            return users;
-        }
-        error!("❌ No se pudo parsear {:?}; se inicia vacío (el archivo NO se sobrescribe hasta el primer cambio)", file_path);
-        Vec::new()
-    }
-
     async fn save_users(&self) {
-        let users = self.users.lock().await;
-        match serde_json::to_string_pretty(&*users) {
-            Ok(content) => {
-                if let Err(e) = fs::write(&self.subscribers_file, content) {
-                    error!("❌ Error guardando usuarios: {}", e);
-                }
-            }
-            Err(e) => error!("❌ Error serializando usuarios: {}", e),
+        let rows: Vec<(String, String)> = {
+            let users = self.users.lock().await;
+            users
+                .iter()
+                .filter_map(|u| Some((u.chat_id.clone(), serde_json::to_string(u).ok()?)))
+                .collect()
+        };
+        if let Err(e) = self.store.replace_tg_users(&rows).await {
+            error!("❌ Error guardando usuarios en la BD: {}", e);
         }
     }
 
+    /// Guarda el último pago registrado
     async fn save_payments(&self) {
-        let payments = self.payments.lock().await;
-        if let Ok(content) = serde_json::to_string_pretty(&*payments) {
-            if let Err(e) = fs::write(&self.payments_file, content) {
-                error!("❌ Error guardando pagos: {}", e);
+        let last = self.payments.lock().await.last().cloned();
+        if let Some(p) = last {
+            let data = serde_json::to_string(&p).unwrap_or_default();
+            if let Err(e) = self.store.insert_tg_payment(&p.chat_id, p.stars, &p.charge_id, p.at, &data).await {
+                error!("❌ Error guardando el pago en la BD: {}", e);
             }
         }
     }
@@ -807,11 +773,18 @@ impl TelegramBot {
                     }
                 }
             }
-            if !due.is_empty() {
-                h.save();
-            }
             due
         };
+        // Persistir la marca de "liberada" (también las de stop movido, que no se envían)
+        let released: Vec<u64> = {
+            let h = self.history.lock().await;
+            h.records.iter().filter(|r| r.free_released).map(|r| r.id).collect()
+        };
+        if !due.is_empty() {
+            if let Err(e) = self.store.mark_released(&released).await {
+                error!("❌ No se pudo marcar señales liberadas en la BD: {}", e);
+            }
+        }
         if due.is_empty() {
             return;
         }

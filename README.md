@@ -52,7 +52,8 @@ docker compose up -d --build                  # solo el bot, con tu propia DATAB
 docker compose logs -f bot
 ```
 
-- **Imagen:** se construye por etapas (Node → Rust → Debian slim, ~165 MB), corre sin root, se reinicia sola y guarda los datos en el volumen `botdata`.
+- **Imagen:** se construye por etapas (Node → Rust → Debian slim, ~165 MB), corre sin root y se reinicia sola.
+- **Datos:** todo el estado vive en MariaDB (volumen `dbdata`): configuración, historial de señales y operaciones, fotos del balance, usuarios y pagos de Telegram, y posiciones abiertas. Si el bot se detiene o se reinicia, lo recupera todo al arrancar.
 - **Aplicar cambios del `.env`:** `docker compose up -d bot`. `restart` no vuelve a leer el `.env`.
 - **Aplicar cambios de código:** `docker compose up -d --build bot`.
 
@@ -66,7 +67,7 @@ sudo cp deploy/arbitrajebot.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now arbitrajebot
 ```
 
-Para actualizar: `./deploy/update.sh`. Para respaldar: `./deploy/backup.sh`. Los detalles, la seguridad y el checklist de marcha blanca están en [PUESTA_EN_MARCHA.md](PUESTA_EN_MARCHA.md).
+Para actualizar: `./deploy/update.sh`. Para respaldar: `./deploy/backup.sh` (vuelca la base de datos a `backups/bd_*.sql.gz`). Los detalles, la seguridad y el checklist de marcha blanca están en [PUESTA_EN_MARCHA.md](PUESTA_EN_MARCHA.md).
 
 ## Configuración (`.env`)
 
@@ -86,7 +87,7 @@ Lo marcado con 🖥️ también se puede cambiar desde el dashboard: se guarda e
 | `REBOUND_RISK_PER_TRADE`, `REBOUND_MAX_POSITIONS` 🖥️ | Riesgo (0,5%) y posiciones máximas (2) del rebote |
 | `ADMIN_API_TOKEN` | Token de la API y del dashboard. **Obligatorio en producción** (`openssl rand -hex 32`) |
 | `API_BIND` / `API_PORT` | Dirección y puerto de la API (`127.0.0.1:3001` por defecto) |
-| `DATA_DIR` | Carpeta de usuarios, pagos, historial de señales y foto de equity |
+| `DATA_DIR` | Carpeta de archivos de versiones anteriores (se migran solos a la BD al arrancar) |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` 🖥️ | Bot de Telegram y tu chat de administrador |
 | `PREMIUM_PRICE_STARS`, `TRIAL_DAYS`, `REFERRAL_BONUS_DAYS`, `FREE_SIGNAL_DELAY_HOURS` | Monetización |
 | `PAYSUPPORT_CONTACT` | Contacto para `/paysupport`; Telegram lo exige en bots que cobran |
@@ -161,5 +162,5 @@ docs/                  guía del dashboard y de las estrategias
 
 - Rust **≥ 1.91** (lo exige alloy vía hypersdk), o Docker.
 - Node.js ≥ 20 para el dashboard.
-- MariaDB/MySQL; las tablas se crean solas al arrancar.
+- MariaDB/MySQL; las tablas se crean solas al arrancar. Tablas de estado: `BOT_signals`, `BOT_equity_snapshots`, `BOT_tg_users`, `BOT_tg_payments`, `BOT_open_positions` (más las de configuración).
 - En Windows con Docker Desktop: al menos 8 GB asignados a Docker (`.wslconfig`) para compilar sin bloqueos.

@@ -36,7 +36,7 @@ Todos los datos de operaciones salen del **historial de señales** del bot, que 
   - rangos de 24 h, 3 días, 7 días o 30 días;
   - la curva **parte del capital inicial** (línea punteada) y sube o baja con cada cierre, así siempre se ve la evolución completa; la escala se ajusta para que se aprecien incluso cambios de centavos;
   - arriba muestra cuánto cambió el balance en el período elegido. Si en ese rango no hubo posiciones abiertas, la línea es plana: es lo correcto;
-  - el historial se guarda en `equity_history.json`: fotos de 5 min de los últimos 7 días y una por hora hasta 1 año.
+  - el historial se guarda en la base de datos (tabla `BOT_equity_snapshots`): fotos de 5 min de los últimos 7 días y una por hora hasta 1 año. Sobrevive a reinicios.
 - **Por estrategia:** resultado de tendencia y de rebote por separado.
 - **Posiciones abiertas:** entrada, precio actual, stop (con ↑ si ya se subió), tamaño, P&L y **% de la cuenta**.
 - **Últimas operaciones:** las 10 más recientes (el historial completo está en **Historial**).

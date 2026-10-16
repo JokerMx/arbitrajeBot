@@ -6,8 +6,10 @@ use tracing::{info, error};
 
 pub mod models;
 pub mod config_repository;
+pub mod store;
 
 pub use config_repository::ConfigRepository;
+pub use store::Store;
 
 /// Configuración de la base de datos
 #[derive(Debug, Clone)]

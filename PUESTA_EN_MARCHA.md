@@ -74,15 +74,15 @@ docker compose logs -f bot
 ```
 
 - **Reinicio:** automático ante caídas y al reiniciar el servidor (`restart: unless-stopped`).
-- **Datos:** `subscribers.json`, los pagos y el historial de señales viven en el volumen `botdata`.
-- **Usuarios existentes:** si tienes un `subscribers.json` de antes, cópialo al volumen una sola vez:
+- **Datos:** todo el estado (configuración, señales, operaciones, balance, usuarios, pagos y posiciones abiertas) vive en MariaDB, en el volumen `dbdata`. Si el bot se detiene o se reinicia, lo recupera al arrancar.
+- **Usuarios existentes:** si tienes un `subscribers.json` de antes, cópialo una vez a `/app/data/` y reinicia. El bot lo importa a la BD y lo renombra a `.migrado`. Igual con los demás JSON antiguos:
   ```bash
   docker compose cp subscribers.json bot:/app/data/subscribers.json && docker compose restart bot
   ```
 - **Actualizar:** `git pull && docker compose up -d --build`.
-- **Respaldo:**
+- **Respaldo:** `./deploy/backup.sh` vuelca la base de datos completa a `backups/bd_*.sql.gz`. Para restaurar:
   ```bash
-  docker compose cp bot:/app/data ./backups/data_$(date +%F)
+  gunzip -c backups/bd_FECHA.sql.gz | docker compose exec -T db sh -c 'mariadb -uarbibot -p"$MARIADB_PASSWORD" arbibot'
   ```
 
 ### Opción B: systemd (sin Docker)
