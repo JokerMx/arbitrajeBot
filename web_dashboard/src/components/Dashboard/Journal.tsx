@@ -151,39 +151,42 @@ const RANGES = [
 
 export const EquityCurve: React.FC<{ j: Journal; height?: number }> = ({ j, height = 256 }) => {
   const [range, setRange] = React.useState<(typeof RANGES)[number]["key"]>("3d");
-  // Escala ajustada a los datos (se aprecian movimientos de centavos) o desde el capital inicial
-  const [fit, setFit] = React.useState(true);
   const hours = RANGES.find((r) => r.key === range)!.hours;
-  const since = Date.now() - hours * 3600_000;
+  const nowTs = parseISO(j.updated_at).getTime();
+  const since = nowTs - hours * 3600_000;
 
-  // Fotos cada 5 min; si aún no hay suficientes, se usa la curva por operación
-  const source = (j.equity_series?.length ?? 0) >= 2 ? j.equity_series : j.equity_curve;
+  // Historia completa: curva por operación (parte en el capital inicial y sube/baja en
+  // cada cierre) + fotos cada 5 min (incluyen posiciones abiertas) + el valor actual.
   const unrealized = j.open.reduce((acc, o) => acc + (o.unrealized_usd ?? 0), 0);
   const realizedNow = j.initial_capital + j.stats.total_pnl_usd;
-  const points = source
+  const all = [...(j.equity_curve ?? []), ...(j.equity_series ?? [])]
     .map((p) => ({ ts: parseISO(p.t).getTime(), equity: Number(p.equity.toFixed(2)) }))
-    .filter((p) => p.ts >= since);
-  // Último punto = ahora (incluye posiciones abiertas a precio actual)
-  points.push({ ts: parseISO(j.updated_at).getTime(), equity: Number((realizedNow + unrealized).toFixed(2)) });
+    .filter((p) => p.ts < nowTs)
+    .sort((a, b) => a.ts - b.ts);
+  all.push({ ts: nowTs, equity: Number((realizedNow + unrealized).toFixed(2)) });
 
-  // Marcas de cada operación cerrada en el rango
-  const closes = j.closed
-    .map((t) => ({ ts: parseISO(t.closed_at).getTime(), win: (t.pnl_usd ?? t.pnl_pct) >= 0, t }))
-    .filter((c) => c.ts >= since);
+  // Valor del balance en un instante: antes de la primera foto, el capital inicial
   const equityAt = (ts: number) => {
-    let e = points[0]?.equity ?? j.initial_capital;
-    for (const p of points) {
+    let e = j.initial_capital;
+    for (const p of all) {
       if (p.ts <= ts) e = p.equity;
       else break;
     }
     return e;
   };
+  // El rango siempre empieza en su borde izquierdo con el valor que tenía en ese momento
+  const points = [{ ts: since, equity: equityAt(since) }, ...all.filter((p) => p.ts > since)];
 
+  // Marcas de cada operación cerrada en el rango
+  const closes = j.closed
+    .map((t) => ({ ts: parseISO(t.closed_at).getTime(), win: (t.pnl_usd ?? t.pnl_pct) >= 0, t }))
+    .filter((c) => c.ts >= since);
+
+  // La escala siempre incluye el capital inicial, con margen ajustado al movimiento
   const values = points.map((p) => p.equity);
-  const min = fit ? Math.min(...values) : Math.min(...values, j.initial_capital);
-  const max = fit ? Math.max(...values) : Math.max(...values, j.initial_capital);
-  // Margen: 15% del rango, con un mínimo pequeño para que una línea plana quede centrada
-  const pad = Math.max((max - min) * 0.15, (fit ? 0.0002 : 0.002) * j.initial_capital);
+  const min = Math.min(...values, j.initial_capital);
+  const max = Math.max(...values, j.initial_capital);
+  const pad = Math.max((max - min) * 0.12, 0.05);
   const last = points[points.length - 1];
   const first = points[0];
   const up = last.equity >= j.initial_capital;
@@ -199,21 +202,14 @@ export const EquityCurve: React.FC<{ j: Journal; height?: number }> = ({ j, heig
         <div>
           <h3 className="text-lg font-semibold">Evolución del balance</h3>
           <p className="text-xs text-gray-400">
-            Foto cada 5 min (capital + ganancias cerradas + posiciones abiertas a precio actual) · ● cierre de operación
+            Parte del capital inicial (línea punteada) · foto cada 5 min con las posiciones abiertas a precio actual · ● cierre de operación
           </p>
           <p className={`text-sm font-mono mt-1 ${pnlColor(change)}`}>
             {usd(change, true)} ({pct(changePct)}) en el período
-            {Math.abs(change) < 0.005 && <span className="text-gray-500 text-xs font-sans"> · sin cambios: no hubo posiciones abiertas</span>}
+            {Math.abs(change) < 0.005 && <span className="text-gray-500 text-xs font-sans"> · sin cambios en este rango (no hubo posiciones abiertas)</span>}
           </p>
         </div>
         <div className="flex flex-wrap gap-1 text-xs">
-          <button
-            onClick={() => setFit(!fit)}
-            className="px-3 py-1 rounded-lg bg-dark-300 text-gray-300 hover:bg-dark-400 mr-2"
-            title="Escala ajustada a los datos o desde el capital inicial"
-          >
-            Escala: {fit ? "ajustada" : "desde el inicio"}
-          </button>
           {RANGES.map((r) => (
             <button
               key={r.key}
@@ -275,7 +271,7 @@ export const EquityCurve: React.FC<{ j: Journal; height?: number }> = ({ j, heig
                 ifOverflow="discard"
                 label={{ value: "capital inicial", position: "insideBottomLeft", fill: "#6b7280", fontSize: 10 }}
               />
-              <Area type="monotone" dataKey="equity" stroke={color} strokeWidth={2} fill="url(#eqFill)" dot={false} isAnimationActive={false} />
+              <Area type="stepAfter" dataKey="equity" stroke={color} strokeWidth={2} fill="url(#eqFill)" dot={false} isAnimationActive={false} />
               {closes.map((c) => (
                 <ReferenceDot
                   key={c.t.id}
